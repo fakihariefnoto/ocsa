@@ -40,13 +40,15 @@ folds them into the reclaimable total.
 ```
 ocsa                     interactive dashboard (default)
 ocsa scan                print the summary                [--json]
-ocsa sessions            list by size                     [--sort bytes|updated|messages|cost] [--limit N]
+ocsa sessions            list by size                     [--sort bytes|updated|messages|cost|folder] [--group] [--limit N]
+ocsa projects            storage per project and folder   [--limit N] [--json]
 ocsa vacuum              rewrite the database in place    [--yes] [--force]
 ocsa incremental         return free pages cheaply        (needs auto_vacuum=incremental)
 ocsa autovacuum <mode>   set none|full|incremental        [--yes]
 ocsa clean [snapshots]   truncate log, prune tool output  [--yes]
 ocsa orphans             rows whose parent is gone        [--yes]
 ocsa report --out FILE   write a markdown report
+ocsa preview [screen]    print one screen: dash, projects, sessions, grouped
 
 --data-dir DIR   use a different installation
 --yes            apply changes; without it, mutating commands are dry runs
@@ -57,17 +59,40 @@ Exit codes: `0` ok, `1` usage, `2` nothing to do, `3` precondition failed,
 
 ## In the dashboard
 
-| key | action |
-|---|---|
-| `v` | vacuum — rewrite in place, returns free pages |
-| `i` | incremental vacuum — cheap, no rewrite |
-| `a` / `f` | set auto_vacuum incremental / full |
-| `c` | truncate log, prune tool output older than 7 days |
-| `k` | prune snapshots (breaks revert for old sessions) |
-| `s` | session list, sorted by size |
-| `r` | write `reports/YYYY-MM-DD.md` |
+The dashboard is a menu: `↑`/`↓` move, `enter` runs the highlighted action.
+Single-key shortcuts still work for anyone who knows them.
 
-Everything mutating asks first and reports what it verified afterwards.
+```
+│ ACTIONS                                                                              │
+│   ▸  Vacuum database               rewrite in place, returns free pages  [v]         │
+│     Incremental vacuum             cheap, needs auto_vacuum=incremental  [i]         │
+│     auto_vacuum = incremental      makes cheap reclaiming possible  [a]              │
+│     auto_vacuum = full             zero maintenance, small cost on deletes  [f]      │
+│     Clean log and tool output      truncate the log, drop old spills  [c]            │
+│     Prune snapshots                breaks revert for old sessions  [k]               │
+│     Browse projects                storage by project and folder  [p]                │
+│     Browse sessions                every session by size  [s]                        │
+│     Write report                   reports/YYYY-MM-DD.md  [r]                        │
+│     Quit                             [q]                                             │
+```
+
+Mutating entries ask for confirmation first, and report what they verified
+afterwards.
+
+### Browsing storage by project and folder
+
+`p` lists every project with its session count, payload bytes, folder and last
+use. `enter` opens that project's sessions. `s` lists all sessions, `g` toggles
+between largest-first and grouped-by-folder with per-folder subtotals:
+
+```
+│   /Users/fakih/Projects/anofac/knalin   24.2 MB · 18 sessions                        │
+│      20.1 MB  Copy plan to .plan and execute                  28d ago                │
+│     910.6 KB  Map inbox, channels, templates (@explore suba…  1mo ago                │
+```
+
+Sessions whose folder no longer exists are marked, in both views — that is how
+stale sessions surface.
 
 ## Safe against a running OpenCode
 
@@ -106,6 +131,9 @@ install. Regression tests worth knowing about:
 
 - `TestPerSessionBytesCountsOneGeneration` — v1 and v2 tables share message ids;
   summing both double counts every conversation
-- `TestSplitArgs` — Go's `flag` package stops at the first positional, which
-  silently ignored `--data-dir`
+- `TestSplitArgs` / `TestValueFlagsMatchTheFlagSet` — Go's `flag` package stops at
+  the first positional, which silently ignored `--data-dir`; the value-flag set
+  is now read off the FlagSet so a new flag cannot desync it
+- `TestMutatingActionsConfirmFirst` — no action writes without a confirmation,
+  and cancelling returns where it left off
 - `TestVacuumVerifiesRowCounts`, `TestFrozenGenerationIsNotCountedAsFreeSpace`
