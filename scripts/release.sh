@@ -125,6 +125,13 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 REMOTE="$(git remote get-url origin 2>/dev/null || true)"
 [ -n "$REMOTE" ] || die "no origin remote"
+
+# Compare against the remote as it is now: a stale origin/main would let an
+# unpushed commit through.
+say "Fetching origin"
+git fetch --quiet origin main 2>/dev/null ||
+	warn "could not reach origin; comparing against the local origin/main"
+
 [ -z "$(git log origin/main..HEAD 2>/dev/null)" ] ||
 	die "local main is ahead of origin/main; push first"
 
