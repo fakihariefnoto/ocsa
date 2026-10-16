@@ -96,25 +96,25 @@ func (m Model) viewDash() string {
 	// in this file and only one of them is reclaimable, which the old two-tone
 	// bar could not show.
 	comp := s.Composition()
-	barW := 40
-	if cw < 72 {
-		barW = 22
+	barW := cw - lipgloss.Width(paths.ByteSize(comp.Total)) - len(" on disk") - 6
+	if barW > 64 {
+		barW = 64 // beyond this it stops reading as a gauge
 	}
-	// The total rides on the heading and a blank line separates it from the bar:
-	// a coloured block directly under text reads as part of it.
+	if barW < 12 {
+		barW = 12
+	}
+	// A blank line separates the heading from the bar, which would otherwise
+	// read as part of the heading text. The total sits immediately after the
+	// bar, not aligned to the far edge: pushed to the edge it looked like an
+	// unrelated column two lines away from the thing it describes.
 	totalText := paths.ByteSize(comp.Total) + " on disk"
-	dbHead := stLabel.Render("DATABASE")
-	gap := cw - lipgloss.Width(totalText) - lipgloss.Width("DATABASE")
-	if gap < 2 {
-		gap = 2
-	}
-	b.WriteString(dbHead + strings.Repeat(" ", gap) + stValue.Render(totalText) + "\n\n")
+	b.WriteString(stLabel.Render("DATABASE") + "\n\n")
 	b.WriteString("  " + stackedBar([]stackSegment{
-		{comp.Live, stLive, glyphLive},
-		{comp.Frozen, stFrozen, glyphFrozen},
-		{comp.Other, stOther, glyphOther},
-		{comp.Free, stReclaim, glyphReclaim},
-	}, barW) + "\n")
+		{comp.Live, stLive, glyphBlock},
+		{comp.Frozen, stFrozen, glyphBlock},
+		{comp.Other, stOther, glyphBlock},
+		{comp.Free, stReclaim, glyphBlock},
+	}, barW) + "  " + stValue.Render(totalText) + "\n\n")
 
 	// Legend: same glyph and colour as the bar, with the share so the segments
 	// can be judged without measuring them by eye.
@@ -139,14 +139,14 @@ func (m Model) viewDash() string {
 			frozenNote = "abandoned tables, last written " + g.LastWrite.Format("2006-01-02")
 		}
 	}
-	legend(stLive, glyphLive, "live", comp.Live, "the generation OpenCode writes to")
-	legend(stFrozen, glyphFrozen, "frozen", comp.Frozen, frozenNote)
-	legend(stOther, glyphOther, "other", comp.Other, "indexes, key/value state, schema")
+	legend(stLive, glyphBlock, "live", comp.Live, "the generation OpenCode writes to")
+	legend(stFrozen, glyphBlock, "frozen", comp.Frozen, frozenNote)
+	legend(stOther, glyphBlock, "other", comp.Other, "indexes, key/value state, schema")
 	reclaimNote := "free pages a vacuum would return"
 	if comp.Free == 0 {
 		reclaimNote = "nothing to return; the file holds only rows"
 	}
-	legend(stReclaim, glyphReclaim, "reclaimable", comp.Free, reclaimNote)
+	legend(stReclaim, glyphBlock, "reclaimable", comp.Free, reclaimNote)
 
 	// The comparable numbers: how much bigger the file is than it needs to be,
 	// and how much of the disk that is.

@@ -573,16 +573,30 @@ func TestDatabaseBlockHasAGapBeforeTheBar(t *testing.T) {
 	if idx < 0 || idx+2 >= len(lines) {
 		t.Fatalf("no DATABASE heading found:\n%s", out)
 	}
-	if !strings.Contains(lines[idx], "on disk") {
-		t.Errorf("the heading does not carry the total: %q", lines[idx])
-	}
 	blank := strings.Trim(strings.Trim(lines[idx+1], "│"), " ")
 	if blank != "" {
 		t.Errorf("no gap between the heading and the bar: %q", lines[idx+1])
 	}
 	bar := lines[idx+2]
-	if !strings.ContainsAny(bar, glyphLive+glyphFrozen+glyphOther+glyphReclaim) {
+	if !strings.Contains(bar, glyphBlock) {
 		t.Errorf("the line after the gap is not the bar: %q", bar)
+	}
+	// The total belongs with the bar, not two lines away on the heading.
+	if !strings.Contains(bar, "on disk") {
+		t.Errorf("the bar line does not carry the total: %q", bar)
+	}
+	// And a second gap after the bar: its colour blocks run straight into the
+	// legend's colour swatches without one.
+	if idx+3 >= len(lines) {
+		t.Fatalf("no legend after the bar:\n%s", out)
+	}
+	between := strings.Trim(strings.Trim(lines[idx+3], "│"), " ")
+	if between != "" {
+		t.Errorf("no gap between the bar and the legend: %q", lines[idx+3])
+	}
+	legend := lines[idx+4]
+	if !strings.Contains(legend, "live") || !strings.Contains(legend, "%") {
+		t.Errorf("expected the live legend row after the gap, got: %q", legend)
 	}
 }
 

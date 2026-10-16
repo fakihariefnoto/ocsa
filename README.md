@@ -11,10 +11,10 @@ real data** — and 379 MB of that "real data" turned out to be a copy of itself
 without stopping OpenCode.
 
 ```
-DATABASE                                                        565.2 MB on disk
+DATABASE
 
-  █████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒░
-  ██ live          178.2 MB   31.5%  the generation OpenCode writes to
+  ████████████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒░  565.4 MB on disk
+  ██ live          178.3 MB   31.5%  the generation OpenCode writes to
   ▓▓ frozen        379.5 MB   67.1%  abandoned tables, last written 2026-09-22
   ▒▒ other           7.6 MB    1.3%  indexes, key/value state, schema
   ░░ reclaimable     8.0 KB    0.0%  free pages a vacuum would return
