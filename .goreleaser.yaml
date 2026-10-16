@@ -1,0 +1,90 @@
+# GoReleaser — ocsa.
+#
+# Drives three of the install channels in one pass:
+#   1. GitHub Releases    (archives + checksums.txt)
+#   2. Homebrew tap       (brews -> fakihariefnoto/homebrew-tap)
+#   3. go install         (no config: the module path is the channel)
+#
+# Run from a clean checkout with the tap token in the environment:
+#
+#   TAP_GITHUB_TOKEN=$(gh auth token) goreleaser release --clean
+#
+# The binary is pure Go (modernc.org/sqlite, no CGO), so every target
+# cross-compiles from one machine. Linux and macOS only: on Windows the data
+# directory layout differs and that path has never been exercised, so it is not
+# advertised rather than shipped untested.
+
+version: 2
+
+project_name: ocsa
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: ocsa
+    main: .
+    binary: ocsa
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.FullCommit}}
+      - -X main.date={{.Date}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: ocsa
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+    # No wrap_in_directory: the Homebrew formula does `bin.install "ocsa"` and
+    # expects the binary at the archive root. This matches the existing commitly
+    # formula in the tap.
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: fakihariefnoto
+    name: ocsa
+
+brews:
+  - name: ocsa
+    repository:
+      owner: fakihariefnoto
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/fakihariefnoto/ocsa"
+    description: "Report on and reclaim the disk OpenCode's SQLite store uses"
+    license: "MIT"
+    install: |
+      bin.install "ocsa"
+    # `brew test` must exercise something real. --version is also what a
+    # package manager runs immediately after install, so this doubles as a
+    # smoke test that the binary starts.
+    test: |
+      assert_match "ocsa", shell_output("#{bin}/ocsa --version")
+
+changelog:
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999

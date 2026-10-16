@@ -1,3 +1,5 @@
 ocsa
+bin/
+dist/
 reports/
 *.test

@@ -1,139 +1,173 @@
-# OCSA — OpenCode Storage Analytics
+# ocsa
 
-Shows where a local OpenCode installation's disk goes, and reclaims it.
+**See where OpenCode's disk space went, and take it back.**
 
-Built after finding a 10.75 GB database holding 562 MB of live data, of which
-only 176 MB was still in use.
+OpenCode keeps everything in one SQLite database. That database only ever grows:
+SQLite is told never to shrink the file, so pages freed by old conversations sit
+there forever. On one Mac this added up to a **10.75 GB file holding 562 MB of
+real data** — and 379 MB of that "real data" turned out to be a copy of itself.
+
+`ocsa` shows you the whole picture in a terminal dashboard and cleans it up
+without stopping OpenCode.
+
+```
+DATABASE  █████████████████████████████░  569.5 MB   live 563.5 MB   free 6.0 MB   WAL 1.5 MB
+          145796 pages × 4096 B   auto_vacuum incremental   integrity ok
+
+GENERATIONS
+    379.5 MB  v1 (legacy)   FROZEN since 2026-09-22
+    176.5 MB  v2 (current)  live
+
+RECLAIMABLE  168.5 MB   free pages 6.0 MB · snapshots 121.6 MB · log 40.9 MB
+```
+
+## Install
 
 ```sh
-go build -o ocsa .
-./ocsa              # dashboard
-./ocsa scan         # same thing, non-interactive
+brew tap fakihariefnoto/tap
+brew install fakihariefnoto/tap/ocsa
 ```
 
-## Why it is worth running
+Or, if you have Go:
 
-A real install, before and after a first pass:
-
-| | Before | After |
-|---|---|---|
-| `opencode.db` | 10.75 GB | 562 MB |
-| free pages | 10.16 GB | 0 B |
-| disk free | 6.2 GB (99% full) | 16 GB (42%) |
-
-The tool's most useful finding is not the free space though. The database
-carries **two representations of the same conversations**:
-
-```
-GENERATIONS
-  v1 (legacy)      379.5 MB  105873 rows  last write 2026-09-22  FROZEN
-  v2 (current)     176.2 MB   24170 rows  last write 2026-10-15  live
+```sh
+go install github.com/fakihariefnoto/ocsa@latest
 ```
 
-The v1 tables stopped being written months ago but are still 68% of the file.
-They are **not** free space — only deleting rows reclaims them, which is a
-decision about data, not about disk. OCSA reports them separately and never
-folds them into the reclaimable total.
+Or build it yourself:
 
-## Commands
-
-```
-ocsa                     interactive dashboard (default)
-ocsa scan                print the summary                [--json]
-ocsa sessions            list by size                     [--sort bytes|updated|messages|cost|folder] [--group] [--limit N]
-ocsa projects            storage per project and folder   [--limit N] [--json]
-ocsa vacuum              rewrite the database in place    [--yes] [--force]
-ocsa incremental         return free pages cheaply        (needs auto_vacuum=incremental)
-ocsa autovacuum <mode>   set none|full|incremental        [--yes]
-ocsa clean [snapshots]   truncate log, prune tool output  [--yes]
-ocsa orphans             rows whose parent is gone        [--yes]
-ocsa report --out FILE   write a markdown report
-ocsa preview [screen]    print one screen: dash, projects, sessions, grouped
-
---data-dir DIR   use a different installation
---yes            apply changes; without it, mutating commands are dry runs
+```sh
+git clone https://github.com/fakihariefnoto/ocsa
+cd ocsa && make build
 ```
 
-Exit codes: `0` ok, `1` usage, `2` nothing to do, `3` precondition failed,
-`4` verification failed.
+## Use
 
-## In the dashboard
+Run it with no arguments for the dashboard:
 
-The dashboard is a menu: `↑`/`↓` move, `enter` runs the highlighted action.
-Single-key shortcuts still work for anyone who knows them.
-
-```
-│ ACTIONS                                                                              │
-│   ▸  Vacuum database               rewrite in place, returns free pages  [v]         │
-│     Incremental vacuum             cheap, needs auto_vacuum=incremental  [i]         │
-│     auto_vacuum = incremental      makes cheap reclaiming possible  [a]              │
-│     auto_vacuum = full             zero maintenance, small cost on deletes  [f]      │
-│     Clean log and tool output      truncate the log, drop old spills  [c]            │
-│     Prune snapshots                breaks revert for old sessions  [k]               │
-│     Browse projects                storage by project and folder  [p]                │
-│     Browse sessions                every session by size  [s]                        │
-│     Write report                   reports/YYYY-MM-DD.md  [r]                        │
-│     Quit                             [q]                                             │
+```sh
+ocsa
 ```
 
-Mutating entries ask for confirmation first, and report what they verified
-afterwards.
-
-### Browsing storage by project and folder
-
-`p` lists every project with its session count, payload bytes, folder and last
-use. `enter` opens that project's sessions. `s` lists all sessions, `g` toggles
-between largest-first and grouped-by-folder with per-folder subtotals:
+Move with `↑`/`↓`, run the highlighted action with `enter`. Nothing writes to
+your database until you confirm it, and every action reports what it verified
+when it finishes.
 
 ```
-│   /Users/fakih/Projects/anofac/knalin   24.2 MB · 18 sessions                        │
-│      20.1 MB  Copy plan to .plan and execute                  28d ago                │
-│     910.6 KB  Map inbox, channels, templates (@explore suba…  1mo ago                │
+ACTIONS
+  ▸  Vacuum database               rewrite in place, returns free pages  [v]
+    Incremental vacuum             cheap, needs auto_vacuum=incremental  [i]
+    auto_vacuum = incremental      makes cheap reclaiming possible  [a]
+    auto_vacuum = full             zero maintenance, small cost on deletes  [f]
+    Clean log and tool output      truncate the log, drop old spills  [c]
+    Prune snapshots                breaks revert for old sessions  [k]
+    Browse projects                storage by project and folder  [p]
+    Browse sessions                every session by size  [s]
+    Write report                   reports/YYYY-MM-DD.md  [r]
 ```
 
-Sessions whose folder no longer exists are marked, in both views — that is how
-stale sessions surface.
+### Where the space is
 
-## Safe against a running OpenCode
+`p` lists projects by how much of the database they account for, and `enter`
+opens one. `s` lists every session; press `g` to group them by folder with a
+subtotal per folder.
 
-`vacuum` is the interesting case. It rewrites the file in place, and does so
-while OpenCode is running:
+```
+  /Users/fakih/Projects/anofac/knalin   24.2 MB · 18 sessions
+     20.1 MB  Copy plan to .plan and execute                 28d ago
+    910.6 KB  Map inbox, channels, templates (@explore suba…  1mo ago
+```
+
+Sessions from folders you have since deleted are marked, which is usually the
+first sign of clutter worth removing.
+
+### What it does without the dashboard
+
+```sh
+ocsa scan                  # the summary, no TUI
+ocsa sessions --group      # sessions by folder
+ocsa projects              # storage per project
+ocsa vacuum                # dry run; add --yes to run it
+ocsa incremental           # cheap reclaim, no rewrite
+ocsa autovacuum full       # tell SQLite to shrink itself from now on
+ocsa report --out health.md
+```
+
+Exit codes: `0` ok, `2` nothing to do, `3` refused for safety, `4` verified
+failure. `2` is normal — it means the database is already clean.
+
+## The two things worth knowing
+
+**VACUUM is what actually frees the space.** Deleting conversations does not
+shrink the file. It marks pages free, and they stay in the file until something
+rewrites it. `ocsa vacuum` does that rewrite in place — 10.75 GB → 562 MB took
+about 20 seconds.
+
+**The database holds two copies of your history.** A legacy set of tables
+(`session`, `message`, `part`) and the current one (`session_v2`,
+`session_message`) both contain the same conversations — same message IDs. On
+the Mac that prompted this tool, the legacy copy stopped being written in
+September and was still 379 MB, about two thirds of the file. That space is *not*
+reclaimable by vacuum, because it is not free space: it is real rows nobody has
+deleted. `ocsa` reports it separately and never folds it into the reclaimable
+total, because deleting it is a decision about your data, not your disk. (See
+[PLAN.md](PLAN.md) §8 for the open question of whether it is safe to delete.)
+
+## Is it safe to run against a live OpenCode?
+
+Yes, and it is built around that. `vacuum` rewrites the database while OpenCode
+is running:
 
 - it never copies or moves files, so there is no window where a message can be
-  written to a swapped-out inode
-- `busy_timeout` (5 min) makes it wait for the write lock rather than fail; if
-  it still cannot get it, SQLite rolls the whole thing back and nothing changed
+  written to a file that has been swapped out from under the running process
+- it waits up to five minutes for the write lock rather than failing, and if it
+  still cannot get it, SQLite rolls the entire operation back — nothing changed
 - it checks `integrity_check` before, and `integrity_check`, `foreign_key_check`
-  and per-table row counts after; a mismatch is reported as a failure, not a
-  success
+  and per-table row counts after. A mismatch is reported as a failure.
+- it drains the write-ahead log when it is done. Skipping that step is the
+  classic way to reclaim half of what you expected: the log grows to the size of
+  the database during a vacuum.
 
-## Two things that are easy to get wrong
+`scan`, `sessions`, `projects` and `preview` only ever read.
 
-**The WAL.** `VACUUM` leaves a write-ahead log as large as the database — 567 MB
-in the case above. Without a `wal_checkpoint(TRUNCATE)` immediately after, you
-reclaim roughly half of what you thought. It is part of `vacuum`, not an
-afterthought.
+## Keeping it small
 
-**Root cause.** The default `auto_vacuum=0` means SQLite never shrinks the file,
-so freed pages accumulate until someone runs a vacuum. Set `INCREMENTAL` to make
-`ocsa incremental` able to drop them in milliseconds, or `FULL` to have SQLite
-do it automatically on commit.
+`auto_vacuum` is off by default, which is the root cause of the growth. Set it to
+`incremental` and `ocsa incremental` can return free pages in milliseconds
+whenever you want, without a rewrite. Set it to `full` and SQLite does it by
+itself, at a small cost on deletes. Either way the file stops ballooning.
 
 ## Development
 
 ```sh
-go test ./...
-go vet ./...
+make check      # gofmt, go vet, go test
+make run        # dashboard against your real install
+make preview S=grouped
+make snapshot   # build release artifacts locally, no publish
 ```
 
-Tests build their own fixture databases in `t.TempDir()` and never touch a real
-install. Regression tests worth knowing about:
+Tests build their own throwaway databases and never touch a real installation.
+A few of them exist because of bugs this tool shipped with at some point: one
+pins the double-counting of sessions across the two table generations, one
+covers `flag`'s habit of ignoring flags written after a positional argument, and
+one asserts that no action can write without a confirmation.
 
-- `TestPerSessionBytesCountsOneGeneration` — v1 and v2 tables share message ids;
-  summing both double counts every conversation
-- `TestSplitArgs` / `TestValueFlagsMatchTheFlagSet` — Go's `flag` package stops at
-  the first positional, which silently ignored `--data-dir`; the value-flag set
-  is now read off the FlagSet so a new flag cannot desync it
-- `TestMutatingActionsConfirmFirst` — no action writes without a confirmation,
-  and cancelling returns where it left off
-- `TestVacuumVerifiesRowCounts`, `TestFrozenGenerationIsNotCountedAsFreeSpace`
+## Releasing
+
+GoReleaser drives all three channels — GitHub releases, the Homebrew formula in
+`fakihariefnoto/homebrew-tap`, and `go install` via the module path.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+TAP_GITHUB_TOKEN=<token> goreleaser release --clean
+```
+
+The token needs `Contents: read and write` on the tap repository. The
+`release.yml` workflow does the same thing on GitHub with a `TAP_GITHUB_TOKEN`
+secret. Note that `goreleaser check` currently exits non-zero because `brews` is
+deprecated in favour of `homebrew_casks`; casks are macOS-only, so the formula is
+kept deliberately — it serves Linux installs too.
+
+## Licence
+
+MIT

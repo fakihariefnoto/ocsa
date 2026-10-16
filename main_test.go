@@ -127,3 +127,30 @@ func TestRunUsageErrors(t *testing.T) {
 		t.Errorf("version exit code = %d, want 0", code)
 	}
 }
+
+// TestVersionAndHelpAreHandledBeforeFlagParsing: a package manager runs
+// `ocsa --version` immediately after install, and a bare flag used to be parsed
+// as a subcommand's flag and fail.
+func TestVersionAndHelpAreHandledBeforeFlagParsing(t *testing.T) {
+	for _, arg := range []string{"--version", "-v", "version"} {
+		if code := run([]string{arg}); code != 0 {
+			t.Errorf("%s exit code = %d, want 0", arg, code)
+		}
+	}
+	for _, arg := range []string{"--help", "-h", "help"} {
+		if code := run([]string{arg}); code != 0 {
+			t.Errorf("%s exit code = %d, want 0", arg, code)
+		}
+	}
+}
+
+// TestVersionIsInjectable guards the ldflags contract goreleaser relies on: the
+// version must be a variable, not a constant.
+func TestVersionIsInjectable(t *testing.T) {
+	old := version
+	version = "1.2.3"
+	defer func() { version = old }()
+	if version != "1.2.3" {
+		t.Error("version is not assignable, so -ldflags -X main.version= will not work")
+	}
+}

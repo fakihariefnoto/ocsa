@@ -22,7 +22,18 @@ import (
 	"github.com/fakih/ocsa/internal/ui"
 )
 
-const version = "0.1.0"
+// Injected at build time by goreleaser:
+//
+//	-ldflags "-X main.version=... -X main.commit=... -X main.date=..."
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
+func printVersion() {
+	fmt.Printf("ocsa %s (commit %s, built %s)\n", version, commit, date)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -67,6 +78,20 @@ func newFlagSet(cmd string) (*flag.FlagSet, *options) {
 }
 
 func run(args []string) int {
+	// Handle these before flag parsing: `ocsa --version` is the first thing a
+	// package manager runs when it installs the binary, and it must not need a
+	// valid subcommand.
+	if len(args) > 0 {
+		switch args[0] {
+		case "--version", "-v", "version":
+			printVersion()
+			return 0
+		case "--help", "-h", "help":
+			usage()
+			return 0
+		}
+	}
+
 	cmd := "ui"
 	if len(args) > 0 && !isFlag(args[0]) {
 		cmd, args = args[0], args[1:]
@@ -135,8 +160,8 @@ func run(args []string) int {
 			which = fs.Arg(0)
 		}
 		return runPreview(p, which, *o.width, *o.height)
-	case "version", "--version":
-		fmt.Println("ocsa " + version)
+	case "version", "--version", "-v":
+		printVersion()
 		return 0
 	case "help", "-h", "--help":
 		usage()
