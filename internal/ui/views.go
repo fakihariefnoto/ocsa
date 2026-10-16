@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fakih/ocsa/internal/actions"
 	"github.com/fakih/ocsa/internal/paths"
 	"github.com/fakih/ocsa/internal/storage"
 )
@@ -391,6 +392,44 @@ func folderCell(si storage.SessionInfo, width int) string {
 
 func (m Model) viewConfirm() string {
 	var b strings.Builder
+	cw := m.contentWidth()
+
+	if m.isClaim {
+		b.WriteString(stWarn.Render("CLAIM STORAGE") + "  " +
+			stSub.Render("nothing happens until you press y") + "\n\n")
+		b.WriteString("  " + stLabel.Render(padRight("STEP", 44)+"  "+padLeft("FREES", 10)) + "\n")
+		for _, st := range m.claimPlan.Steps {
+			mark := stOK.Render("+")
+			label := padRight(fit(st.Label, 44), 44)
+			size := padLeft(paths.ByteSize(st.Projected), 10)
+			detail := st.Detail
+			if st.Status == actions.StepSkipped {
+				mark = stSub.Render("·")
+				label = stSub.Render(label)
+				size = stSub.Render(padLeft("-", 10))
+				detail = st.Reason
+			}
+			b.WriteString("  " + mark + " " + label + "  " + stValue.Render(size) + "\n")
+			for _, line := range wrapWords(detail, cw-4, "      ", "      ") {
+				b.WriteString(stSub.Render(line) + "\n")
+			}
+		}
+		b.WriteString("\n  " + stLabel.Render(padRight("PROJECTED", 44)+"  ") +
+			stGoodBar.Render(padLeft(paths.ByteSize(m.claimPlan.Projected), 10)) + "\n")
+		if m.claimPlan.Frozen > 0 {
+			// Same columns as PROJECTED, so the numbers line up.
+			b.WriteString("  " + stSub.Render(padRight(
+				fit("frozen tables (needs row deletion)", 44), 44)) +
+				"  " + stWarn.Render(padLeft(paths.ByteSize(m.claimPlan.Frozen), 10)) + "\n")
+		}
+		b.WriteString("\n  " + stKey.Render("[s]") + " " +
+			stSub.Render(toggleLabel(m.claimOpts.IncludeSnapshots, m.claimPlan.Snapshots)) + "\n")
+		b.WriteString("  " + stSub.Render("if OpenCode is mid-message, this waits for a gap") + "\n")
+		b.WriteString("\n  " + stKey.Render("[y]") + " " + stSub.Render("claim it") + "   " +
+			stKey.Render("[n]") + " " + stSub.Render("cancel"))
+		return m.frame(strings.TrimRight(b.String(), "\n"))
+	}
+
 	b.WriteString(stWarn.Render("CONFIRM") + "\n\n")
 	b.WriteString("  " + stText.Render(m.confirmLabel) + "\n")
 	if m.confirmNote != "" {
@@ -398,6 +437,15 @@ func (m Model) viewConfirm() string {
 	}
 	b.WriteString("\n  " + stLabel.Render("y to proceed, n to cancel"))
 	return m.frame(b.String())
+}
+
+// toggleLabel states what pressing [s] will do, and what it costs.
+func toggleLabel(on bool, snapshotBytes int64) string {
+	if on {
+		return "include snapshots (" + paths.ByteSize(snapshotBytes) +
+			") - breaks revert for old sessions"
+	}
+	return "include snapshots? currently skipped: they hold revert data"
 }
 
 func (m Model) viewRunning() string {
@@ -449,10 +497,46 @@ func (m Model) viewDone() string {
 				stSub.Render(k) + "\n")
 		}
 	}
+	if m.claimResult != nil && len(m.claimResult.Outcomes) > 0 {
+		b.WriteString("\n  " + stLabel.Render("STEPS") + "\n")
+		for _, out := range m.claimResult.Outcomes {
+			mark := stOK.Render("+")
+			label := padRight(fit(out.Step.Label, 44), 44)
+			if out.Err != "" {
+				mark = stBad.Render("!")
+				label = stBad.Render(label)
+			}
+			note := out.Note
+			if out.Err != "" {
+				note = out.Err
+			}
+			b.WriteString("  " + mark + " " + label +
+				stValue.Render(padLeft(paths.ByteSize(out.Bytes), 10)) + "  " +
+				stSub.Render(truncateLine(note, 40)) + "\n")
+		}
+	}
+	if m.claimResult != nil {
+		a := m.claimResult.Activity
+		line := "would have been safe to run"
+		if !a.SafeIfRun {
+			line = "ran despite a writer"
+		}
+		b.WriteString("\n  " + stLabel.Render("OPENCODE AT THE TIME") + "  " +
+			stSub.Render(a.Summary+" ("+line+")") + "\n")
+	}
 	if r.Verified && !r.DryRun {
 		b.WriteString("\n  " + stSub.Render("press [enter] to rescan"))
 	}
 	return m.frame(strings.TrimRight(b.String(), "\n"))
+}
+
+// truncateLine keeps a note inside one line.
+func truncateLine(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
 }
 
 // projectLabel is the friendliest name a project has: its name, else the last

@@ -353,3 +353,24 @@ Two additions the plan did not anticipate, both from bugs found while testing:
 `delete` was left out on purpose. Deleting sessions is irreversible, it is a
 curation decision rather than a storage one, and `opencode session delete`
 already exists. Shipping a second way to lose history did not seem worth it.
+
+### Claim storage (added after §8 was written)
+
+One action that does the whole safe sweep, since the individual operations were
+correct but a reader should not have to sequence four of them. It builds a plan,
+shows it — including the steps it will skip and why — and executes that same
+plan, so what was confirmed is what runs. Snapshots are the only destructive
+step and are opt-in, off by default.
+
+Concurrency, which the plan did not consider at all:
+
+- an advisory lock file in the data directory, so two `ocsa` processes cannot
+  work on one database. They would serialise on SQLite's write lock anyway, but
+  the second would sit in a five-minute busy timeout looking hung.
+- **the write lock is the signal, not the process list.** A client sitting at a
+  prompt and one streaming a response are indistinguishable in `ps`; asking
+  SQLite by briefly attempting `BEGIN IMMEDIATE` and rolling back is exact. The
+  probe uses a 250 ms timeout so it answers rather than queueing.
+- a claim waits for the write lock to go quiet for a couple of seconds before
+  starting, and refuses with exit 3 if it never does. `--force` skips the wait
+  but not the verification.

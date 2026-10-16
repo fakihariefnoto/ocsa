@@ -11,6 +11,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Auto-vacuum modes as SQLite stores them.
+const (
+	AutoVacuumNone        = 0
+	AutoVacuumFull        = 1
+	AutoVacuumIncremental = 2
+)
+
 // Stats is the page-level view of the database file.
 type Stats struct {
 	PageSize    int64

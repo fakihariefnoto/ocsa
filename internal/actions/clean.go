@@ -307,3 +307,31 @@ func dirSize(p string) int64 {
 	})
 	return total
 }
+
+// ToolOutputPrunable reports how much of the spilled tool output is older than
+// age, and how many files that is, without deleting anything. The plan needs
+// the number before the user agrees to it.
+func ToolOutputPrunable(dir string, age time.Duration) (int64, int) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0
+	}
+	cutoff := time.Now().Add(-age)
+	var bytes int64
+	var n int
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if age > 0 && info.ModTime().After(cutoff) {
+			continue
+		}
+		bytes += info.Size()
+		n++
+	}
+	return bytes, n
+}

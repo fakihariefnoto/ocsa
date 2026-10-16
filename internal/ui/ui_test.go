@@ -1,12 +1,16 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/fakih/ocsa/internal/actions"
 	"github.com/fakih/ocsa/internal/db"
 	"github.com/fakih/ocsa/internal/paths"
 	"github.com/fakih/ocsa/internal/storage"
@@ -377,5 +381,177 @@ func TestEscReturnsToDashboard(t *testing.T) {
 	}
 	if m = press(t, m, "esc"); m.screen != scrDash {
 		t.Errorf("esc left us on screen %v", m.screen)
+	}
+}
+
+// TestClaimIsTheFirstAction: the point of the button is that it is the obvious
+// one, so it must be reachable with a single enter from the dashboard.
+func TestClaimIsTheFirstAction(t *testing.T) {
+	m := newModel(fixtureScan(t))
+	items := m.menu()
+	if items[0].id != "claim" {
+		t.Fatalf("first action is %q, want claim", items[0].id)
+	}
+	if m.cursor != 0 {
+		t.Fatal("cursor does not start on the first action")
+	}
+	m = press(t, m, "enter")
+	if m.screen != scrConfirm {
+		t.Fatalf("enter opened screen %v, want the confirmation", m.screen)
+	}
+	if !m.isClaim {
+		t.Fatal("the claim flag is not set, so the confirm screen would run the wrong thing")
+	}
+	if len(m.claimPlan.Steps) == 0 {
+		t.Fatal("no plan was built to confirm")
+	}
+}
+
+// TestClaimConfirmationShowsThePlan: the user has to be able to see what will
+// happen, including what will be skipped and why, before agreeing to it.
+func TestClaimConfirmationShowsThePlan(t *testing.T) {
+	s := fixtureScan(t)
+	if err := os.MkdirAll(s.Paths.Snapshot+"/snap1", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.Paths.Snapshot+"/snap1/obj", make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := storage.Run(s.Paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel(fresh)
+	out, _ := m.activate("claim")
+	m = out.(Model)
+	view := m.viewConfirm()
+
+	for _, want := range []string{"CLAIM STORAGE", "STEP", "FREES", "PROJECTED", "rewrite"} {
+		if !strings.Contains(strings.ToLower(view), strings.ToLower(want)) {
+			t.Errorf("confirmation is missing %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(view, "nothing happens until you press") {
+		t.Errorf("confirmation does not say it is inert until confirmed:\n%s", view)
+	}
+
+	// Every step must be visible with its reasoning, skipped ones included:
+	// a silently skipped step is the thing this screen exists to prevent.
+	for _, st := range m.claimPlan.Steps {
+		if !strings.Contains(view, st.Label) {
+			t.Errorf("step %q is not shown in the confirmation", st.Label)
+		}
+		if st.Status == actions.StepSkipped && st.Reason != "" &&
+			!strings.Contains(view, st.Reason) {
+			t.Errorf("skipped step %q does not say why", st.Label)
+		}
+	}
+}
+
+// fixtureScanWithSnapshots adds snapshot directories, which is the only way the
+// snapshot step can have bytes to project.
+func fixtureScanWithSnapshots(t *testing.T) *storage.Scan {
+	t.Helper()
+	s := fixtureScan(t)
+	for i := 0; i < 8; i++ {
+		dir := filepath.Join(s.Paths.Snapshot, "snap"+string(rune('a'+i)))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "obj"), make([]byte, 64<<10), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh, err := storage.Run(s.Paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Reclaim.SnapshotPrunable == 0 {
+		t.Fatal("fixture has no prunable snapshots, so the toggle cannot be tested")
+	}
+	return fresh
+}
+
+// TestClaimSnapshotToggleIsOptIn covers the one destructive step.
+func TestClaimSnapshotToggleIsOptIn(t *testing.T) {
+	m := newModel(fixtureScanWithSnapshots(t))
+	out, _ := m.activate("claim")
+	m = out.(Model)
+
+	statusOf := func(plan actions.Plan) string {
+		for _, st := range plan.Steps {
+			if st.ID == "snapshots" {
+				return string(st.Status)
+			}
+		}
+		return "missing"
+	}
+	if got := statusOf(m.claimPlan); got != string(actions.StepSkipped) {
+		t.Errorf("snapshots are %q by default, want skipped", got)
+	}
+	before := m.claimPlan.Projected
+
+	m = press(t, m, "s")
+	if !m.claimOpts.IncludeSnapshots {
+		t.Fatal("s did not opt in")
+	}
+	if got := statusOf(m.claimPlan); got != string(actions.StepPlanned) {
+		t.Errorf("after opting in, snapshots are %q, want planned", got)
+	}
+	if m.claimPlan.Projected <= before {
+		t.Error("opting in did not raise the projection")
+	}
+	if !strings.Contains(m.viewConfirm(), "breaks revert") {
+		t.Error("opting in does not warn about what it costs")
+	}
+
+	m = press(t, m, "s")
+	if m.claimOpts.IncludeSnapshots {
+		t.Error("s did not toggle back off")
+	}
+}
+
+// TestClaimCancelChangesNothing: n must return where it came from and run no
+// action at all.
+func TestClaimCancelChangesNothing(t *testing.T) {
+	m := newModel(fixtureScan(t))
+	out, _ := m.activate("claim")
+	m = out.(Model)
+	if m.runClaimCmdForTest() != nil {
+		t.Fatal("a cancelable claim already has a run function")
+	}
+	m = press(t, m, "n")
+	if m.screen != scrDash {
+		t.Errorf("cancel went to screen %v, want the dashboard", m.screen)
+	}
+	if m.isClaim {
+		t.Error("claim flag survived a cancel")
+	}
+}
+
+// TestPlanRendersInTheResultScreen: after running, the per-step outcome has to
+// be visible, not just a total.
+func TestPlanRendersInTheResultScreen(t *testing.T) {
+	m := newModel(fixtureScan(t))
+	out, _ := m.activate("claim")
+	m = out.(Model)
+	m.claimResult = &actions.ClaimResult{
+		Result: actions.Result{
+			Action: "claim storage", Before: 1024, After: 512, Reclaimed: 512,
+			Verified: true, Elapsed: time.Second,
+		},
+		Outcomes: []actions.StepOutcome{
+			{Step: actions.Step{ID: "vacuum", Label: "Rewrite the database"}, Bytes: 512, Note: "rewritten"},
+			{Step: actions.Step{ID: "log", Label: "Trim the log"}, Err: "permission denied"},
+		},
+		Activity: actions.ActivityReport{Summary: "opencode (pid 1)", SafeIfRun: true},
+	}
+	m.screen = scrDone
+	view := m.viewDone()
+	for _, want := range []string{"STEPS", "Rewrite the database", "Trim the log", "permission denied", "OPENCODE AT THE TIME"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("result screen is missing %q:\n%s", want, view)
+		}
 	}
 }

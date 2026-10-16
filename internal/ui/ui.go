@@ -61,6 +61,12 @@ type Model struct {
 	started      time.Time
 	status       string
 
+	// claim flow: the plan shown on the confirmation is the plan that runs
+	isClaim     bool
+	claimPlan   actions.Plan
+	claimOpts   actions.ClaimOptions
+	claimResult *actions.ClaimResult
+
 	// browsing state
 	filterProject string
 	grouped       bool
@@ -72,8 +78,9 @@ type scanMsg struct {
 }
 
 type actionMsg struct {
-	res actions.Result
-	err error
+	res   actions.Result
+	claim *actions.ClaimResult
+	err   error
 }
 
 type tickMsg time.Time
@@ -86,12 +93,18 @@ func New(p paths.Paths) Model {
 	return Model{p: p, spinner: sp, started: time.Now()}
 }
 
+// ClaimOptionsForPreview lets the previewer show the destructive step too.
+func ClaimOptionsForPreview(o PreviewOptions) actions.ClaimOptions {
+	return actions.ClaimOptions{IncludeSnapshots: o.IncludeSnapshots}
+}
+
 // PreviewOptions selects what to render headlessly.
 type PreviewOptions struct {
-	Screen    string // dash, projects, sessions, grouped, confirm
-	ProjectID string // filter the session list to one project
-	Width     int
-	Height    int
+	Screen           string // dash, projects, sessions, grouped, confirm, claim
+	ProjectID        string // filter the session list to one project
+	IncludeSnapshots bool   // for the claim screen, show the opt-in step too
+	Width            int
+	Height           int
 }
 
 // Preview renders one screen for a scan without a terminal. Used by the
@@ -115,6 +128,13 @@ func Preview(s *storage.Scan, o PreviewOptions) string {
 		m.screen = scrSessions
 		m.grouped = true
 		return m.viewSessions()
+	case "claim":
+		opts := ClaimOptionsForPreview(o)
+		m.claimOpts = opts
+		m.claimPlan = actions.BuildPlan(s, opts).Normalize()
+		m.isClaim = true
+		m.screen = scrConfirm
+		return m.viewConfirm()
 	case "confirm":
 		m.prompt("vacuum the database in place", "a note about the change", nil)
 		return m.viewConfirm()
@@ -126,6 +146,7 @@ func Preview(s *storage.Scan, o PreviewOptions) string {
 // menu is the dashboard's action list, in the order a reader would want them.
 func (m Model) menu() []menuItem {
 	return []menuItem{
+		{"claim", "Claim storage", "the safe sweep: everything except snapshots", "C"},
 		{"v", "Vacuum database", "rewrite in place, returns free pages", "v"},
 		{"i", "Incremental vacuum", "cheap, needs auto_vacuum=incremental", "i"},
 		{"a", "auto_vacuum = incremental", "makes cheap reclaiming possible", "a"},
@@ -149,7 +170,14 @@ func scanCmd(p paths.Paths) tea.Cmd {
 func runCmd(fn func() (actions.Result, error)) tea.Cmd {
 	return func() tea.Msg {
 		res, err := fn()
-		return actionMsg{res, err}
+		return actionMsg{res: res, err: err}
+	}
+}
+
+func runClaimCmd(p paths.Paths, plan actions.Plan, o actions.ClaimOptions) tea.Cmd {
+	return func() tea.Msg {
+		res, err := actions.Claim(p, plan, o)
+		return actionMsg{res: res.Result, claim: &res, err: err}
 	}
 }
 
@@ -175,6 +203,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionMsg:
 		m.result, m.runErr = msg.res, msg.err
+		m.claimResult = msg.claim
 		m.screen = scrDone
 		return m, nil
 
@@ -225,9 +254,20 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			m.screen = scrRunning
 			m.started = time.Now()
+			if m.isClaim {
+				return m, tea.Batch(runClaimCmd(m.p, m.claimPlan, m.claimOpts), tick())
+			}
 			return m, tea.Batch(runCmd(m.run), tick())
 		case "n":
+			m.isClaim = false
 			m.screen = m.prev
+		case "s":
+			if m.isClaim {
+				// Snapshots are the one destructive step, so they are opt-in
+				// here and the plan is rebuilt so the numbers stay honest.
+				m.claimOpts.IncludeSnapshots = !m.claimOpts.IncludeSnapshots
+				m.claimPlan = actions.BuildPlan(m.scan, m.claimOpts).Normalize()
+			}
 		}
 	case scrDone:
 		if k.String() == "enter" {
@@ -272,6 +312,13 @@ func (m Model) dashKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // activate runs a menu entry, opening a confirmation for anything that writes.
 func (m Model) activate(id string) (tea.Model, tea.Cmd) {
 	switch id {
+	case "claim":
+		m.claimOpts = actions.ClaimOptions{}
+		m.claimPlan = actions.BuildPlan(m.scan, m.claimOpts).Normalize()
+		m.isClaim = true
+		m.prev = scrDash
+		m.screen = scrConfirm
+		return m, nil
 	case "v":
 		m.prompt("vacuum the database in place",
 			"rewrites "+paths.ByteSize(m.scan.Stats.FileBytes())+
@@ -335,6 +382,7 @@ func (m Model) activate(id string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) prompt(label, note string, fn func() (actions.Result, error)) {
+	m.isClaim = false
 	m.prev = m.screen
 	m.screen = scrConfirm
 	m.confirmLabel = label
@@ -461,4 +509,13 @@ func writeReport(s *storage.Scan) (string, error) {
 	}
 	name := filepath.Join("reports", s.Scanned.Format("2006-01-02")+".md")
 	return name, os.WriteFile(name, []byte(report.Markdown(s)), 0o644)
+}
+
+// runClaimCmdForTest reports the queued claim command, which must be nil until
+// the user confirms. Used by the cancel test.
+func (m Model) runClaimCmdForTest() tea.Cmd {
+	if m.isClaim && m.screen == scrRunning {
+		return runClaimCmd(m.p, m.claimPlan, m.claimOpts)
+	}
+	return nil
 }

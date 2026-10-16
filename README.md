@@ -53,17 +53,49 @@ Move with `↑`/`↓`, run the highlighted action with `enter`. Nothing writes t
 your database until you confirm it, and every action reports what it verified
 when it finishes.
 
+The first entry is **Claim storage** — the safe sweep. It works out everything
+worth doing, shows you the plan, and does nothing until you agree:
+
+```
+CLAIM STORAGE  nothing happens until you press y
+
+  STEP                                               FREES
+  + Rewrite the database                              6.1 MB
+      drops 6.1 MB of free pages held inside the file
+  + Drain the write-ahead log                         1.4 MB
+      the rewrite inflates the log; without this half the space stays held
+  + Trim the log                                     46.3 MB
+      keeps the last 1.0 MB
+  · Prune old tool output                                  -
+      nothing older than 7 days
+  · Prune old snapshots                                    -
+      off by default: it would break revert for old sessions
+
+  PROJECTED                                        54.0 MB
+  frozen tables (needs row deletion)              379.5 MB
+
+  [s] include snapshots? currently skipped: they hold revert data
+  if OpenCode is mid-message, this waits for a gap
+```
+
+Skipped steps stay on screen with the reason, because a step that quietly does
+not happen is the thing this screen exists to prevent. `s` opts into the one
+destructive step (snapshots hold revert data) and the projections update to
+match. Then `y` runs exactly that plan, and the result screen lists what each
+step actually did — including any step that failed.
+
 ```
 ACTIONS
-  ▸  Vacuum database               rewrite in place, returns free pages  [v]
-    Incremental vacuum             cheap, needs auto_vacuum=incremental  [i]
-    auto_vacuum = incremental      makes cheap reclaiming possible  [a]
-    auto_vacuum = full             zero maintenance, small cost on deletes  [f]
-    Clean log and tool output      truncate the log, drop old spills  [c]
-    Prune snapshots                breaks revert for old sessions  [k]
-    Browse projects                storage by project and folder  [p]
-    Browse sessions                every session by size  [s]
-    Write report                   reports/YYYY-MM-DD.md  [r]
+  ▸  Claim storage                  the safe sweep: everything except snapshots  [C]
+    Vacuum database                 rewrite in place, returns free pages  [v]
+    Incremental vacuum              cheap, needs auto_vacuum=incremental  [i]
+    auto_vacuum = incremental       makes cheap reclaiming possible  [a]
+    auto_vacuum = full              zero maintenance, small cost on deletes  [f]
+    Clean log and tool output       truncate the log, drop old spills  [c]
+    Prune snapshots                 breaks revert for old sessions  [k]
+    Browse projects                 storage by project and folder  [p]
+    Browse sessions                 every session by size  [s]
+    Write report                    reports/YYYY-MM-DD.md  [r]
 ```
 
 ### Where the space is
@@ -85,12 +117,14 @@ first sign of clutter worth removing.
 
 ```sh
 ocsa scan                  # the summary, no TUI
+ocsa claim                 # the safe sweep; prints the plan, dry run without --yes
 ocsa sessions --group      # sessions by folder
 ocsa projects              # storage per project
 ocsa vacuum                # dry run; add --yes to run it
 ocsa incremental           # cheap reclaim, no rewrite
 ocsa autovacuum full       # tell SQLite to shrink itself from now on
 ocsa report --out health.md
+ocsa preview claim         # render a screen without a terminal
 ```
 
 Exit codes: `0` ok, `2` nothing to do, `3` refused for safety, `4` verified
@@ -115,8 +149,8 @@ total, because deleting it is a decision about your data, not your disk. (See
 
 ## Is it safe to run against a live OpenCode?
 
-Yes, and it is built around that. `vacuum` rewrites the database while OpenCode
-is running:
+Yes, and it is built around that — including the case where OpenCode is open in
+another terminal, mid-conversation.
 
 - it never copies or moves files, so there is no window where a message can be
   written to a file that has been swapped out from under the running process
@@ -127,8 +161,31 @@ is running:
 - it drains the write-ahead log when it is done. Skipping that step is the
   classic way to reclaim half of what you expected: the log grows to the size of
   the database during a vacuum.
+- an advisory lock in the data directory stops two `ocsa` processes from working
+  on the same database at once, which would otherwise just look like a hang
 
 `scan`, `sessions`, `projects` and `preview` only ever read.
+
+### When OpenCode is mid-message
+
+Being open is fine — readers do not block a rewrite. Being *mid-write* is not,
+and the process table cannot tell you which it is: a client sitting in a prompt
+looks identical to one streaming a response.
+
+So `claim` asks SQLite itself, by trying to take the write lock with a short
+timeout and rolling straight back. If someone holds it, the claim waits for a
+gap — OpenCode commits between turns, so one turns up in a second or two — and
+only then works. If the write never stops, it gives up with exit code `3` and
+changes nothing, rather than competing for the lock with a running agent:
+
+```
+$ ocsa claim --yes
+OpenCode is writing continuously (opencode (pid 59073)); nothing was changed.
+Retry, or pass --force to take the write lock anyway.
+```
+
+`--force` is there if you know better. It skips the wait, not the safety checks:
+verification still happens and still fails loudly.
 
 ## Keeping it small
 

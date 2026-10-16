@@ -55,6 +55,8 @@ type options struct {
 	keepLog     *int64
 	toolOutDays *int
 	snapKeep    *int
+	snapshots   *bool
+	wait        *time.Duration
 }
 
 func newFlagSet(cmd string) (*flag.FlagSet, *options) {
@@ -73,6 +75,8 @@ func newFlagSet(cmd string) (*flag.FlagSet, *options) {
 	o.keepLog = fs.Int64("keep-bytes", 1<<20, "log bytes to retain when cleaning")
 	o.toolOutDays = fs.Int("tool-output-days", 7, "prune tool output older than N days")
 	o.snapKeep = fs.Int("keep", storage.SnapshotKeepRecent(), "snapshots to keep")
+	o.snapshots = fs.Bool("include-snapshots", false, "let a claim prune snapshots (breaks revert)")
+	o.wait = fs.Duration("wait", 0, "how long a claim waits for a gap in writes (default 30s)")
 	fs.Bool("md", false, "markdown report (the default)")
 	return fs, o
 }
@@ -124,6 +128,35 @@ func run(args []string) int {
 			Yes: *o.yes, Force: *o.force, TruncateLog: *o.keepLog == 0,
 		})
 		return emitResult(res, err, *o.asJSON)
+	case "claim":
+		s := scanOrDie(p)
+		opts := actions.ClaimOptions{
+			Yes:              *o.yes,
+			Force:            *o.force,
+			Wait:             *o.wait,
+			IncludeSnapshots: *o.snapshots,
+			SnapshotKeep:     *o.snapKeep,
+		}
+		plan := actions.BuildPlan(s, opts).Normalize()
+		if !*o.asJSON {
+			printPlan(plan)
+		}
+		res, err := actions.Claim(p, plan, opts)
+		if *o.asJSON {
+			return emitResult(res.Result, err, true)
+		}
+		emitResult(res.Result, err, false)
+		fmt.Println()
+		for _, out := range res.Outcomes {
+			note := out.Note
+			if out.Err != "" {
+				note = "FAILED: " + out.Err
+			}
+			fmt.Printf("  %-46s %10s  %s\\n", out.Step.Label,
+				paths.ByteSize(out.Bytes), note)
+		}
+		fmt.Printf("\n  OpenCode at the time: %s\n", res.Activity.Summary)
+		return exitCodeFor(err)
 	case "incremental", "incr":
 		res, err := actions.Incremental(p)
 		return emitResult(res, err, *o.asJSON)
@@ -159,7 +192,7 @@ func run(args []string) int {
 		if fs.NArg() > 0 {
 			which = fs.Arg(0)
 		}
-		return runPreview(p, which, *o.width, *o.height)
+		return runPreview(p, which, *o.width, *o.height, *o.snapshots)
 	case "version", "--version", "-v":
 		printVersion()
 		return 0
@@ -308,9 +341,11 @@ func runSessions(p paths.Paths, asJSON bool, by string, limit int, group bool) i
 
 // runPreview renders one screen and exits, so the layout can be inspected
 // (and screenshotted) without a terminal.
-func runPreview(p paths.Paths, which string, width, height int) int {
+func runPreview(p paths.Paths, which string, width, height int, snapshots bool) int {
 	s := scanOrDie(p)
-	fmt.Print(ui.Preview(s, ui.PreviewOptions{Screen: which, Width: width, Height: height}))
+	fmt.Print(ui.Preview(s, ui.PreviewOptions{
+		Screen: which, Width: width, Height: height, IncludeSnapshots: snapshots,
+	}))
 	fmt.Println()
 	return 0
 }
@@ -376,6 +411,36 @@ func runReport(p paths.Paths, out string) int {
 	return 0
 }
 
+// printPlan shows what a claim would do, including what it will skip and why.
+func printPlan(plan actions.Plan) {
+	fmt.Println("plan:")
+	for _, line := range plan.StepsText() {
+		fmt.Println("  " + line)
+	}
+	fmt.Printf("  %-46s %10s\n", "PROJECTED", paths.ByteSize(plan.Projected))
+	if plan.Frozen > 0 {
+		fmt.Printf("  %-46s %10s\n", "frozen tables, left alone", paths.ByteSize(plan.Frozen))
+	}
+	fmt.Println()
+}
+
+// exitCodeFor maps an action error onto the documented exit codes.
+func exitCodeFor(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, actions.ErrNothingToDo):
+		return 2
+	case errors.Is(err, actions.ErrPrecondition):
+		return 3
+	case errors.Is(err, actions.ErrVerification):
+		return 4
+	default:
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+}
+
 func emitResult(r actions.Result, err error, asJSON bool) int {
 	if asJSON {
 		_ = report.ResultJSON(os.Stdout, r)
@@ -415,13 +480,14 @@ commands:
   scan                   print the storage summary        [--json]
   sessions               list sessions by size            [--sort bytes|updated|messages|cost|folder] [--limit N] [--group] [--json]
   projects               storage usage per project and folder [--limit N] [--json]
+  claim                  do everything safe in one pass     [--yes] [--force] [--include-snapshots] [--wait 30s]
   vacuum                 rewrite the database in place    [--yes] [--force]
   incremental            return free pages incrementally
   autovacuum <mode>      set none|full|incremental       [--yes]
   clean [snapshots]      truncate log, prune tool output, optionally snapshots [--yes]
   orphans                find rows whose parent is gone  [--yes]
   report --out FILE      write a markdown report
-  preview [screen]       print one screen: dash, projects, sessions, grouped
+  preview [screen]       print one screen: dash, projects, sessions, grouped, claim
 
 flags:
   --data-dir DIR         use a different data directory
