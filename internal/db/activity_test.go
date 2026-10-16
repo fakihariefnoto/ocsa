@@ -34,12 +34,8 @@ func TestWriteLockHeldIsTheRealSignal(t *testing.T) {
 		t.Error("reported a write lock on an idle database")
 	}
 
-	writer, err := Open(idle.Path, true)
+	release, err := HoldWriteLock(idle.Path)
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer writer.Close()
-	if _, err := writer.SQL.Exec("BEGIN IMMEDIATE"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -51,9 +47,7 @@ func TestWriteLockHeldIsTheRealSignal(t *testing.T) {
 		t.Error("did not notice a held write lock")
 	}
 
-	if _, err := writer.SQL.Exec("ROLLBACK"); err != nil {
-		t.Fatal(err)
-	}
+	release()
 	held, err = WriteLockHeld(idle.Path)
 	if err != nil {
 		t.Fatal(err)
@@ -69,14 +63,11 @@ func TestWriteLockHeldIsTheRealSignal(t *testing.T) {
 func TestProbeIsFast(t *testing.T) {
 	conn := activityFixture(t)
 	defer conn.Close()
-	writer, err := Open(conn.Path, true)
+	release, err := HoldWriteLock(conn.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writer.Close()
-	if _, err := writer.SQL.Exec("BEGIN IMMEDIATE"); err != nil {
-		t.Fatal(err)
-	}
+	defer release()
 
 	start := time.Now()
 	if _, err := Probe(conn.Path); err != nil {
@@ -111,14 +102,11 @@ func TestProbeReportsAnOpenFile(t *testing.T) {
 func TestWaitForQuietGivesUp(t *testing.T) {
 	conn := activityFixture(t)
 	defer conn.Close()
-	writer, err := Open(conn.Path, true)
+	release, err := HoldWriteLock(conn.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writer.Close()
-	if _, err := writer.SQL.Exec("BEGIN IMMEDIATE"); err != nil {
-		t.Fatal(err)
-	}
+	defer release()
 
 	quiet, _, err := WaitForQuiet(conn.Path, 400*time.Millisecond, 200*time.Millisecond, nil)
 	if err != nil {

@@ -23,11 +23,26 @@ func Text(w io.Writer, s *storage.Scan) {
 
 	fmt.Fprintln(w, "\nDATABASE")
 	db := s.Stats
-	fmt.Fprintf(w, "  file %s   live %s   free %s   wal %s\n",
-		paths.ByteSize(db.FileBytes()), paths.ByteSize(db.LiveBytes()),
-		paths.ByteSize(db.FreeBytes()), paths.ByteSize(s.WALBytes))
-	fmt.Fprintf(w, "  pages %d x %d   auto_vacuum %s   journal %s   integrity %s\n",
-		db.PageCount, db.PageSize, modeName(db.AutoVacuum), db.JournalMode, s.Integrity)
+	comp := s.Composition()
+	fmt.Fprintf(w, "  %s on disk\n", paths.ByteSize(comp.Total))
+	for _, seg := range comp.Segments() {
+		fmt.Fprintf(w, "  %-14s %10s  %5.1f%%\n", seg.Label,
+			paths.ByteSize(seg.Bytes), seg.Percent(comp.Total))
+	}
+	var scale []string
+	if ratio := comp.Ratio(); ratio > 0 {
+		scale = append(scale, fmt.Sprintf("%.1fx the live data", ratio))
+	}
+	if share := comp.DiskShare(); share > 0 {
+		scale = append(scale, fmt.Sprintf("%.1f%% of the %s free on disk",
+			share, paths.ByteSize(comp.DiskFree)))
+	}
+	if len(scale) > 0 {
+		fmt.Fprintf(w, "  %s\n", strings.Join(scale, " | "))
+	}
+	fmt.Fprintf(w, "  pages %d x %d   auto_vacuum %s   journal %s   integrity %s   wal %s\n",
+		db.PageCount, db.PageSize, modeName(db.AutoVacuum), db.JournalMode,
+		s.Integrity, paths.ByteSize(s.WALBytes))
 
 	if len(s.TableSizes) > 0 {
 		fmt.Fprintln(w, "\nTABLES  (including indexes)")
@@ -123,6 +138,8 @@ func Markdown(s *storage.Scan) string {
 	fmt.Fprintf(&b, "- integrity: `%s`, foreign key violations: %d\n", s.Integrity, s.FKIssues)
 	fmt.Fprintf(&b, "- sessions: %d, projects: %d\n\n", len(s.Sessions), len(s.Projects))
 
+	comp := s.Composition()
+
 	fmt.Fprintf(&b, "## Database\n\n| metric | value |\n|---|---|\n")
 	fmt.Fprintf(&b, "| file | %s |\n", paths.ByteSize(s.Stats.FileBytes()))
 	fmt.Fprintf(&b, "| live | %s |\n", paths.ByteSize(s.Stats.LiveBytes()))
@@ -130,6 +147,27 @@ func Markdown(s *storage.Scan) string {
 	fmt.Fprintf(&b, "| WAL | %s |\n", paths.ByteSize(s.WALBytes))
 	fmt.Fprintf(&b, "| page count | %d |\n", s.Stats.PageCount)
 	fmt.Fprintf(&b, "| auto_vacuum | %s |\n\n", modeName(s.Stats.AutoVacuum))
+
+	fmt.Fprintf(&b, "### What the file is made of\n\n| part | size | share |\n|---|---|---|\n")
+	for _, seg := range comp.Segments() {
+		note := ""
+		switch seg.Key {
+		case "frozen":
+			note = " (a vacuum cannot free this)"
+		case "reclaimable":
+			note = " (a vacuum returns this)"
+		}
+		fmt.Fprintf(&b, "| %s%s | %s | %.1f%% |\n", seg.Label, note,
+			paths.ByteSize(seg.Bytes), seg.Percent(comp.Total))
+	}
+	if ratio := comp.Ratio(); ratio > 0 {
+		fmt.Fprintf(&b, "\nThe file is **%.1fx** the size of the data in active use.\n", ratio)
+	}
+	if share := comp.DiskShare(); share > 0 {
+		fmt.Fprintf(&b, "It is %.1f%% of the %s free on this disk.\n",
+			share, paths.ByteSize(comp.DiskFree))
+	}
+	b.WriteString("\n")
 
 	if len(s.TableSizes) > 0 {
 		fmt.Fprintf(&b, "## Tables by size (including indexes)\n\n| table | size |\n|---|---|\n")

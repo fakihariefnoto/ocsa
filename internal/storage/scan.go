@@ -100,6 +100,8 @@ type Scan struct {
 	DirTotal    int64
 	WALBytes    int64
 	SHMBytes    int64
+	DiskFree    int64
+	DiskTotal   int64
 	Scanned     time.Time
 }
 
@@ -285,6 +287,7 @@ func scanArtifacts(s *Scan) {
 	}
 	s.Artifacts = entries
 	s.DirTotal = dirSize(p.Data)
+	s.DiskFree, s.DiskTotal = diskSpace(p.Data)
 }
 
 func scanSessions(s *Scan, conn *db.DB) error {
@@ -500,7 +503,22 @@ func scanGenerations(s *Scan, conn *db.DB) {
 			}
 		}
 		gens[i].LastWrite = newest
-		gens[i].Frozen = !newest.IsZero() && time.Since(newest) > frozenAfter
+	}
+
+	// Frozen is relative to the other generations, not to the wall clock: a
+	// generation has been abandoned when it stopped being written a while
+	// before the newest write anywhere. Comparing against time.Now() called a
+	// fresh install's current tables "frozen" because their timestamps were
+	// epoch, which is exactly backwards.
+	var newest time.Time
+	for _, g := range gens {
+		if g.LastWrite.After(newest) {
+			newest = g.LastWrite
+		}
+	}
+	for i := range gens {
+		gens[i].Frozen = gens[i].Rows > 0 && !newest.IsZero() &&
+			newest.Sub(gens[i].LastWrite) > frozenAfter
 	}
 	sort.Slice(gens, func(i, j int) bool { return gens[i].Bytes > gens[j].Bytes })
 	s.Generations = gens

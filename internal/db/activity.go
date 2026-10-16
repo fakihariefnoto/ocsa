@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -81,20 +82,31 @@ func Holders(path string) []Holder {
 // rather than queueing behind the writer, and it rolls back so it changes
 // nothing. This is SQLite's own answer to "is someone writing right now",
 // which no amount of scanning the process table can tell you.
+//
+// The probe runs on a pinned connection: a pooled one can be recycled between
+// the BEGIN and the ROLLBACK, and database/sql may reset the session on reuse,
+// which would silently drop the transaction.
 func WriteLockHeld(path string) (bool, error) {
-	conn, err := openTimeout(path, 250*time.Millisecond)
+	handle, err := openTimeout(path, 250*time.Millisecond)
+	if err != nil {
+		return false, err
+	}
+	defer handle.Close()
+
+	ctx := context.Background()
+	conn, err := handle.Conn(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer conn.Close()
 
-	if _, err := conn.Exec("BEGIN IMMEDIATE"); err != nil {
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		if isBusy(err) {
 			return true, nil
 		}
 		return false, err
 	}
-	_, _ = conn.Exec("ROLLBACK")
+	_, _ = conn.ExecContext(ctx, "ROLLBACK")
 	return false, nil
 }
 
@@ -131,37 +143,71 @@ func dataVersion(path string) (int64, error) {
 	return v, nil
 }
 
+// HoldWriteLock takes the write lock on a pinned connection and returns a
+// function that releases it. Tests use it to stand in for a busy agent turn.
+func HoldWriteLock(path string) (release func(), err error) {
+	handle, err := openTimeout(path, 250*time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	conn, err := handle.Conn(ctx)
+	if err != nil {
+		handle.Close()
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		conn.Close()
+		handle.Close()
+		return nil, err
+	}
+	return func() {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		conn.Close()
+		handle.Close()
+	}, nil
+}
+
 // WaitForQuiet blocks until no connection holds the write lock for quietFor
 // continuously, or until deadline passes. Returns whether it went quiet, plus
-// the last probe. Callers use it to take the vacuum off the critical path of a
-// running agent turn instead of either barging in or refusing outright.
+// the last observation. Callers use it to take the vacuum off the critical path
+// of a running agent turn instead of either barging in or refusing outright.
+//
+// Only the write-lock probe runs on each tick: it is a single quick query. The
+// process table (lsof) is read once, for reporting, because forking it several
+// times a second would make the loop too slow to notice a short gap.
 func WaitForQuiet(path string, deadline time.Duration, quietFor time.Duration, tick func(Activity)) (bool, Activity, error) {
 	end := time.Now().Add(deadline)
+
+	last, err := Probe(path)
+	if err != nil {
+		return false, last, err
+	}
+	if tick != nil {
+		tick(last)
+	}
+
 	var quietSince time.Time
-	var last Activity
 	for {
-		a, err := Probe(path)
+		held, err := WriteLockHeld(path)
 		if err != nil {
 			return false, last, err
 		}
-		last = a
-		if tick != nil {
-			tick(a)
-		}
-		if a.WriteLockHeld {
+		last.WriteLockHeld = held
+		if held {
 			quietSince = time.Time{}
 		} else {
 			if quietSince.IsZero() {
 				quietSince = time.Now()
 			}
 			if time.Since(quietSince) >= quietFor {
-				return true, a, nil
+				return true, last, nil
 			}
 		}
 		if time.Now().After(end) {
 			return false, last, nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

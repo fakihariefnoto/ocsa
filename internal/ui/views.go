@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/fakih/ocsa/internal/actions"
 	"github.com/fakih/ocsa/internal/paths"
 	"github.com/fakih/ocsa/internal/storage"
@@ -90,42 +92,74 @@ func (m Model) viewDash() string {
 	cw := m.contentWidth()
 	var b strings.Builder
 
-	// The bar line, then aligned key/value pairs. Every line is sized to the
-	// content width here rather than left to the renderer's word wrapper, which
-	// would break a long line at the left margin with no hanging indent.
-	barW := 28
-	if cw < 64 {
-		barW = 14
+	// The database block: a composition bar, not a fill gauge. Four things are
+	// in this file and only one of them is reclaimable, which the old two-tone
+	// bar could not show.
+	comp := s.Composition()
+	barW := 40
+	if cw < 72 {
+		barW = 22
 	}
 	b.WriteString(stLabel.Render("DATABASE") + "\n")
-	b.WriteString("  " + bar(s.Stats.LiveBytes(), s.Stats.FileBytes(), barW) + "  " +
-		stValue.Render(paths.ByteSize(s.Stats.FileBytes())) + " " +
+	b.WriteString("  " + stackedBar([]stackSegment{
+		{comp.Live, stLive, glyphLive},
+		{comp.Frozen, stFrozen, glyphFrozen},
+		{comp.Other, stOther, glyphOther},
+		{comp.Free, stReclaim, glyphReclaim},
+	}, barW) + "  " + stValue.Render(paths.ByteSize(comp.Total)) + " " +
 		stSub.Render("on disk") + "\n")
 
-	pair := func(l1, v1, l2, v2 string) {
-		b.WriteString("  " + stLabel.Render(padRight(l1, 11)) +
-			stValue.Render(padLeft(v1, 10)) + "   " +
-			stLabel.Render(padRight(l2, 12)) + stValue.Render(v2) + "\n")
+	// Legend: same glyph and colour as the bar, with the share so the segments
+	// can be judged without measuring them by eye.
+	const legendFixed = 2 + 2 + 1 + 12 + 10 + 2 + 6 + 2
+	legend := func(st lipgloss.Style, glyph, label string, bytes int64, note string) {
+		share := 0.0
+		if comp.Total > 0 {
+			share = float64(bytes) / float64(comp.Total) * 100
+		}
+		line := "  " + st.Render(glyph+glyph) + " " +
+			stText.Render(padRight(label, 12)) +
+			stValue.Render(padLeft(paths.ByteSize(bytes), 10)) + "  " +
+			stSub.Render(padLeft(fmt.Sprintf("%4.1f%%", share), 6))
+		if room := cw - legendFixed; room >= 8 {
+			line += "  " + stSub.Render(fit(note, room))
+		}
+		b.WriteString(strings.TrimRight(line, " ") + "\n")
 	}
-	pair("live", paths.ByteSize(s.Stats.LiveBytes()), "free", paths.ByteSize(s.Stats.FreeBytes()))
-	pair("WAL", paths.ByteSize(s.WALBytes), "journal", s.Stats.JournalMode)
-	pair("pages", fmt.Sprint(s.Stats.PageCount), "auto_vacuum", modePlain(s.Stats.AutoVacuum))
-	// integrity is styled, so it cannot go through pair without breaking padding.
-	b.WriteString("  " + stLabel.Render(padRight("page size", 11)) +
-		stValue.Render(padLeft(fmt.Sprintf("%d B", s.Stats.PageSize), 10)) + "   " +
-		stLabel.Render(padRight("integrity", 12)) + integrityStyle(s.Integrity) + "\n")
-
-	if len(s.Generations) > 0 {
-		b.WriteString("\n" + stLabel.Render("GENERATIONS") + "\n")
-		for _, g := range s.Generations {
-			state := stOK.Render("live")
-			if g.Frozen {
-				state = stWarn.Render("frozen since " + g.LastWrite.Format("2006-01-02"))
-			}
-			b.WriteString("  " + stValue.Render(padLeft(paths.ByteSize(g.Bytes), 10)) + "  " +
-				stText.Render(padRight(fit(g.Name, 14), 14)) + state + "\n")
+	frozenNote := "abandoned tables a vacuum cannot free"
+	for _, g := range s.Generations {
+		if g.Frozen && !g.LastWrite.IsZero() {
+			frozenNote = "abandoned tables, last written " + g.LastWrite.Format("2006-01-02")
 		}
 	}
+	legend(stLive, glyphLive, "live", comp.Live, "the generation OpenCode writes to")
+	legend(stFrozen, glyphFrozen, "frozen", comp.Frozen, frozenNote)
+	legend(stOther, glyphOther, "other", comp.Other, "indexes, key/value state, schema")
+	legend(stReclaim, glyphReclaim, "reclaimable", comp.Free, "free pages a vacuum would return")
+
+	// The comparable numbers: how much bigger the file is than it needs to be,
+	// and how much of the disk that is.
+	var scale []string
+	if ratio := comp.Ratio(); ratio > 0 {
+		scale = append(scale, fmt.Sprintf("%.1f× the live data", ratio))
+	}
+	if share := comp.DiskShare(); share > 0 {
+		scale = append(scale, fmt.Sprintf("%.1f%% of the %s free on disk",
+			share, paths.ByteSize(comp.DiskFree)))
+	}
+	if len(scale) > 0 {
+		b.WriteString("  " + stSub.Render(fit(strings.Join(scale, "  ·  "), cw-2)) + "\n")
+	}
+
+	// The bookkeeping line sheds its least important parts on a narrow
+	// terminal instead of wrapping, which would break the block's shape.
+	head := "  " + fmt.Sprintf("%d pages × %d B", s.Stats.PageCount, s.Stats.PageSize) +
+		"  ·  auto_vacuum " + modePlain(s.Stats.AutoVacuum)
+	line := head + "  ·  integrity " + s.Integrity
+	if lipgloss.Width(line)+15 <= cw {
+		line += "  ·  WAL " + paths.ByteSize(s.WALBytes)
+	}
+	b.WriteString(stLabel.Render(fit(line, cw)) + "\n")
 
 	// Reclaimable: one row per source, amounts right-aligned to one column so
 	// they can be compared without reading the labels.
@@ -212,6 +246,18 @@ func (m Model) viewDash() string {
 
 // modePlain is the unstyled auto_vacuum mode, for the aligned key/value grid
 // where a styled cell would break the column padding.
+// modeStylePlain keeps the mode readable in the one-line summary.
+func modeStylePlain(v int) string {
+	switch v {
+	case 2:
+		return stOK.Render("incremental")
+	case 1:
+		return stOK.Render("full")
+	default:
+		return stWarn.Render("none")
+	}
+}
+
 func modePlain(v int) string {
 	switch v {
 	case 1:

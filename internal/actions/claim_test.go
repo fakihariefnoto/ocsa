@@ -177,15 +177,14 @@ func TestClaimIsDryRunWithoutYes(t *testing.T) {
 func TestClaimRefusesWhileOpenCodeIsWriting(t *testing.T) {
 	s, p := claimFixture(t)
 
-	// Hold the write lock the way a busy agent turn would.
-	writer, err := db.Open(p.DB, true)
+	// Hold the write lock the way a busy agent turn would. This has to be a
+	// pinned connection: a pooled one gets recycled, and database/sql may reset
+	// the session, silently dropping the transaction and the lock with it.
+	release, err := db.HoldWriteLock(p.DB)
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer writer.Close()
-	if _, err := writer.SQL.Exec("BEGIN IMMEDIATE"); err != nil {
 		t.Fatalf("could not take the write lock for the test: %v", err)
 	}
+	defer release()
 
 	held, err := db.WriteLockHeld(p.DB)
 	if err != nil {
@@ -213,25 +212,24 @@ func TestClaimRefusesWhileOpenCodeIsWriting(t *testing.T) {
 func TestWaitForQuietReturnsWhenTheWriterStops(t *testing.T) {
 	s, p := claimFixture(t)
 
-	writer, err := db.Open(p.DB, true)
+	release, err := db.HoldWriteLock(p.DB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writer.Close()
-	if _, err := writer.SQL.Exec("BEGIN IMMEDIATE"); err != nil {
-		t.Fatal(err)
-	}
 
+	// Hold long enough to be observed: the claim does one process-table read
+	// before it starts polling, which can take a few hundred milliseconds.
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(400 * time.Millisecond)
-		_, _ = writer.SQL.Exec("ROLLBACK")
+		time.Sleep(1200 * time.Millisecond)
+		release()
 		close(released)
 	}()
+	defer release()
 
 	plan := BuildPlan(s, ClaimOptions{}).Normalize()
 	res, err := Claim(p, plan, ClaimOptions{
-		Yes: true, Wait: 10 * time.Second, QuietFor: 300 * time.Millisecond,
+		Yes: true, Wait: 20 * time.Second, QuietFor: 300 * time.Millisecond,
 	})
 	<-released
 	if err != nil {

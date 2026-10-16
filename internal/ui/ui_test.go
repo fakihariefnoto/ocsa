@@ -106,7 +106,8 @@ func press(t *testing.T, m Model, key string) Model {
 func TestPreviewRendersWithoutATerminal(t *testing.T) {
 	s := fixtureScan(t)
 	out := Preview(s, PreviewOptions{Screen: "dash", Width: 112, Height: 44})
-	for _, want := range []string{"OCSA", "DATABASE", "GENERATIONS", "RECLAIMABLE", "SESSIONS", "ACTIONS"} {
+	for _, want := range []string{"OCSA", "DATABASE", "live", "frozen", "reclaimable",
+		"RECLAIMABLE", "SESSIONS", "ACTIONS"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dashboard is missing %q\n%s", want, out)
 		}

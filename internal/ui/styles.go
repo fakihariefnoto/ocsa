@@ -207,3 +207,93 @@ func (m Model) contentWidth() int {
 	}
 	return w
 }
+
+// Composition colours and glyphs. One colour and shape per category, reused in
+// the bar and its legend so the mapping needs no looking up.
+var (
+	colLive    = lipgloss.Color("39")  // in use
+	colFrozen  = lipgloss.Color("208") // real rows, untouched by a vacuum
+	colOther   = lipgloss.Color("244")
+	colReclaim = lipgloss.Color("42") // returnable right now
+
+	stLive    = lipgloss.NewStyle().Foreground(colLive)
+	stFrozen  = lipgloss.NewStyle().Foreground(colFrozen)
+	stOther   = lipgloss.NewStyle().Foreground(colOther)
+	stReclaim = lipgloss.NewStyle().Foreground(colReclaim)
+
+	glyphLive    = "█"
+	glyphFrozen  = "▓"
+	glyphOther   = "▒"
+	glyphReclaim = "░"
+)
+
+// stackSegment is one slice of a stacked bar.
+type stackSegment struct {
+	bytes int64
+	style lipgloss.Style
+	glyph string
+}
+
+// stackedBar draws segments proportionally, allocating exactly width cells.
+// Cells are assigned by largest remainder rather than rounded independently,
+// which would leave a one-cell gap or overflow at the end of the bar.
+func stackedBar(segments []stackSegment, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	var total int64
+	for _, s := range segments {
+		total += s.bytes
+	}
+	if total <= 0 {
+		return lipgloss.NewStyle().Foreground(colDim).Render(strings.Repeat(glyphReclaim, width))
+	}
+
+	cells := make([]int, len(segments))
+	remainders := make([]float64, len(segments))
+	assigned := 0
+	for i, s := range segments {
+		exact := float64(s.bytes) / float64(total) * float64(width)
+		cells[i] = int(exact)
+		remainders[i] = exact - float64(cells[i])
+		assigned += cells[i]
+	}
+	// Hand out what rounding left over, largest remainder first.
+	for assigned < width {
+		best, bestRem := -1, -1.0
+		for i := range segments {
+			if segments[i].bytes > 0 && remainders[i] > bestRem {
+				best, bestRem = i, remainders[i]
+			}
+		}
+		if best < 0 {
+			break
+		}
+		cells[best]++
+		remainders[best] = -1
+		assigned++
+	}
+	// A category that exists must be visible, or the bar lies about it.
+	for i, s := range segments {
+		if s.bytes > 0 && cells[i] == 0 && width > len(segments) {
+			largest := 0
+			for j := range cells {
+				if cells[j] > cells[largest] {
+					largest = j
+				}
+			}
+			if cells[largest] > 1 {
+				cells[largest]--
+				cells[i]++
+			}
+		}
+	}
+
+	var b strings.Builder
+	for i, s := range segments {
+		if cells[i] > 0 {
+			b.WriteString(s.style.Render(strings.Repeat(s.glyph, cells[i])))
+		}
+	}
+	return b.String()
+}
