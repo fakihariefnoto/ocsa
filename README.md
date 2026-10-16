@@ -258,3 +258,22 @@ serves the Linux archives. Recorded here so the warning is not a surprise.
 ## Licence
 
 MIT
+
+## What overlaps with what
+
+`claim` is a superset, not a separate mechanism. It runs the same operations,
+in a safe order, with one confirmation:
+
+| Menu action | Inside `claim`? |
+|---|---|
+| Vacuum database | yes — it is step 1 |
+| auto_vacuum = incremental | yes, when there is something worth rewriting |
+| Clean log and tool output | yes |
+| Prune snapshots | yes, but only if you opt in with `s` |
+| auto_vacuum = full | **no** — `claim` picks incremental; full does more work per delete |
+| Incremental vacuum | **no** — a rewrite makes this unnecessary |
+| Browse projects / sessions, Write report | no — read only |
+
+The individual actions stay because sometimes you want exactly one of them:
+re-running `incremental` after a busy week, or setting `full` deliberately. Each
+one says in its hint whether `claim` already covers it.

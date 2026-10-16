@@ -147,12 +147,12 @@ func Preview(s *storage.Scan, o PreviewOptions) string {
 func (m Model) menu() []menuItem {
 	return []menuItem{
 		{"claim", "Claim storage", "the safe sweep: everything except snapshots", "C"},
-		{"v", "Vacuum database", "rewrite in place, returns free pages", "v"},
+		{"v", "Vacuum database", "just the rewrite; Claim does this too", "v"},
 		{"i", "Incremental vacuum", "cheap, needs auto_vacuum=incremental", "i"},
-		{"a", "auto_vacuum = incremental", "makes cheap reclaiming possible", "a"},
-		{"f", "auto_vacuum = full", "zero maintenance, small cost on deletes", "f"},
-		{"c", "Clean log and tool output", "truncate the log, drop old spills", "c"},
-		{"k", "Prune snapshots", "breaks revert for old sessions", "k"},
+		{"a", "auto_vacuum = incremental", "mode only; Claim sets this when it rewrites", "a"},
+		{"f", "auto_vacuum = full", "not what Claim picks: more work per delete", "f"},
+		{"c", "Clean log and tool output", "log and spills; Claim does this too", "c"},
+		{"k", "Prune snapshots", "also opt-in inside Claim, off by default", "k"},
 		{"p", "Browse projects", "storage by project and folder", "p"},
 		{"s", "Browse sessions", "every session by size", "s"},
 		{"r", "Write report", "reports/YYYY-MM-DD.md", "r"},

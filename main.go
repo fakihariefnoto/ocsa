@@ -152,7 +152,7 @@ func run(args []string) int {
 			if out.Err != "" {
 				note = "FAILED: " + out.Err
 			}
-			fmt.Printf("  %-46s %10s  %s\\n", out.Step.Label,
+			fmt.Printf("  %-46s %10s  %s\n", out.Step.Label,
 				paths.ByteSize(out.Bytes), note)
 		}
 		fmt.Printf("\n  OpenCode at the time: %s\n", res.Activity.Summary)

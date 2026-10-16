@@ -449,8 +449,11 @@ func Claim(p paths.Paths, plan Plan, o ClaimOptions) (res ClaimResult, err error
 		res.Reclaimed += out.Bytes
 	}
 	if res.Reclaimed < 0 {
-		res.Notes = append(res.Notes, "the database grew by "+
-			paths.ByteSize(-res.Reclaimed)+" (page bookkeeping)")
+		// Do not guess at the cause: OpenCode may have written during the run,
+		// and a wrong explanation is worse than none.
+		res.Notes = append(res.Notes, "the file grew by "+
+			paths.ByteSize(-res.Reclaimed)+" during the run; something else is "+
+			"writing to it as well")
 		res.Reclaimed = 0
 	}
 	return res, nil
