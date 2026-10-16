@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -554,5 +555,88 @@ func TestPlanRendersInTheResultScreen(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("result screen is missing %q:\n%s", want, view)
 		}
+	}
+}
+
+// TestDatabaseBlockHasAGapBeforeTheBar: a coloured bar directly under the
+// heading reads as part of the heading text, which is what it looked like.
+func TestDatabaseBlockHasAGapBeforeTheBar(t *testing.T) {
+	out := Preview(fixtureScan(t), PreviewOptions{Screen: "dash", Width: 100, Height: 40})
+	lines := strings.Split(out, "\n")
+	idx := -1
+	for i, l := range lines {
+		if strings.Contains(l, "DATABASE") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 || idx+2 >= len(lines) {
+		t.Fatalf("no DATABASE heading found:\n%s", out)
+	}
+	if !strings.Contains(lines[idx], "on disk") {
+		t.Errorf("the heading does not carry the total: %q", lines[idx])
+	}
+	blank := strings.Trim(strings.Trim(lines[idx+1], "│"), " ")
+	if blank != "" {
+		t.Errorf("no gap between the heading and the bar: %q", lines[idx+1])
+	}
+	bar := lines[idx+2]
+	if !strings.ContainsAny(bar, glyphLive+glyphFrozen+glyphOther+glyphReclaim) {
+		t.Errorf("the line after the gap is not the bar: %q", bar)
+	}
+}
+
+// TestReclaimableZeroExplainsItself: "0 B 0.0%" looks like a bug to a reader;
+// it is the success state and should say so.
+func TestReclaimableZeroExplainsItself(t *testing.T) {
+	s := fixtureScan(t)
+	comp := s.Composition()
+	out := Preview(s, PreviewOptions{Screen: "dash", Width: 110, Height: 40})
+	line := ""
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "reclaimable") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no reclaimable row:\n%s", out)
+	}
+	if comp.Free == 0 {
+		if !strings.Contains(line, "nothing to return") {
+			t.Errorf("zero reclaimable is not explained: %q", line)
+		}
+	} else if !strings.Contains(line, "would return") {
+		t.Errorf("non-zero reclaimable should say what it is: %q", line)
+	}
+}
+
+// TestCompositionLegendSharesSumTo100 keeps the legend honest.
+func TestCompositionLegendSharesSumTo100(t *testing.T) {
+	out := Preview(fixtureScan(t), PreviewOptions{Screen: "dash", Width: 120, Height: 40})
+	var sum float64
+	var rows int
+	for _, l := range strings.Split(out, "\n") {
+		for _, key := range []string{"live", "frozen", "other", "reclaimable"} {
+			if !strings.Contains(l, key) {
+				continue
+			}
+			if i := strings.Index(l, "%"); i > 0 {
+				start := i - 1
+				for start > 0 && (l[start-1] == '.' || (l[start-1] >= '0' && l[start-1] <= '9')) {
+					start--
+				}
+				if v, err := strconv.ParseFloat(strings.TrimSpace(l[start:i]), 64); err == nil {
+					sum += v
+					rows++
+				}
+			}
+		}
+	}
+	if rows < 4 {
+		t.Fatalf("found %d share rows, want one per category:\n%s", rows, out)
+	}
+	if sum < 99.0 || sum > 101.0 {
+		t.Errorf("the four shares sum to %.1f%%, which is not a whole file", sum)
 	}
 }

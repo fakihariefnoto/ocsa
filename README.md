@@ -11,18 +11,26 @@ real data** — and 379 MB of that "real data" turned out to be a copy of itself
 without stopping OpenCode.
 
 ```
-DATABASE
-  █████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒░  564.5 MB on disk
-  ██ live          177.5 MB   31.4%  the generation OpenCode writes to
-  ▓▓ frozen        379.5 MB   67.2%  abandoned tables, last written 2026-09-22
-  ▒▒ other           7.6 MB    1.3%  indexes, key/value state, schema
-  ░░ reclaimable     4.0 KB    0.0%  free pages a vacuum would return
-  3.2× the live data  ·  10.6% of the 5.2 GB free on disk
+DATABASE                                                        565.2 MB on disk
 
-RECLAIMABLE  125.0 MB
+  █████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒░
+  ██ live          178.2 MB   31.5%  the generation OpenCode writes to
+  ▓▓ frozen        379.5 MB   67.1%  abandoned tables, last written 2026-09-22
+  ▒▒ other           7.6 MB    1.3%  indexes, key/value state, schema
+  ░░ reclaimable     8.0 KB    0.0%  free pages a vacuum would return
+  3.2× the live data  ·  10.5% of the 5.3 GB free on disk
+
+RECLAIMABLE  125.2 MB
   snapshots, newest 5 kept                                        124.8 MB
   log, 1 MB kept                                                   40.9 MB
 ```
+
+A reclaimable figure near zero is the *good* state, not a bug: SQLite reuses
+freed pages before growing the file, so on a database that is being used
+normally there is nothing sitting in the freelist to return. It only piles up
+when whole pages are dropped faster than they are reused — session compaction,
+or deleting sessions — which is exactly how the file that prompted this tool
+reached 10 GB of free pages.
 
 The bar is a composition, not a fill gauge: four things live in that file, and
 only one of them is reclaimable. It is why a file can look nearly full and still

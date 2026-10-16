@@ -100,14 +100,21 @@ func (m Model) viewDash() string {
 	if cw < 72 {
 		barW = 22
 	}
-	b.WriteString(stLabel.Render("DATABASE") + "\n")
+	// The total rides on the heading and a blank line separates it from the bar:
+	// a coloured block directly under text reads as part of it.
+	totalText := paths.ByteSize(comp.Total) + " on disk"
+	dbHead := stLabel.Render("DATABASE")
+	gap := cw - lipgloss.Width(totalText) - lipgloss.Width("DATABASE")
+	if gap < 2 {
+		gap = 2
+	}
+	b.WriteString(dbHead + strings.Repeat(" ", gap) + stValue.Render(totalText) + "\n\n")
 	b.WriteString("  " + stackedBar([]stackSegment{
 		{comp.Live, stLive, glyphLive},
 		{comp.Frozen, stFrozen, glyphFrozen},
 		{comp.Other, stOther, glyphOther},
 		{comp.Free, stReclaim, glyphReclaim},
-	}, barW) + "  " + stValue.Render(paths.ByteSize(comp.Total)) + " " +
-		stSub.Render("on disk") + "\n")
+	}, barW) + "\n")
 
 	// Legend: same glyph and colour as the bar, with the share so the segments
 	// can be judged without measuring them by eye.
@@ -135,7 +142,11 @@ func (m Model) viewDash() string {
 	legend(stLive, glyphLive, "live", comp.Live, "the generation OpenCode writes to")
 	legend(stFrozen, glyphFrozen, "frozen", comp.Frozen, frozenNote)
 	legend(stOther, glyphOther, "other", comp.Other, "indexes, key/value state, schema")
-	legend(stReclaim, glyphReclaim, "reclaimable", comp.Free, "free pages a vacuum would return")
+	reclaimNote := "free pages a vacuum would return"
+	if comp.Free == 0 {
+		reclaimNote = "nothing to return; the file holds only rows"
+	}
+	legend(stReclaim, glyphReclaim, "reclaimable", comp.Free, reclaimNote)
 
 	// The comparable numbers: how much bigger the file is than it needs to be,
 	// and how much of the disk that is.
