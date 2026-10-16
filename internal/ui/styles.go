@@ -128,17 +128,6 @@ func plural(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
-func modeStyle(v int) string {
-	switch v {
-	case 1:
-		return stOK.Render("full")
-	case 2:
-		return stOK.Render("incremental")
-	default:
-		return stWarn.Render("none")
-	}
-}
-
 func integrityStyle(v string) string {
 	if v == "ok" {
 		return stOK.Render(v)
@@ -153,4 +142,68 @@ func lipglossWidth(body string, w int) string {
 		return body
 	}
 	return lipgloss.NewStyle().Width(w).Render(body)
+}
+
+// fit truncates to at most w visible cells, ellipsis included. Budgets are
+// computed from it so no line is left to lipgloss's wrapper, which breaks a
+// long line at the left margin with no hanging indent.
+func fit(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= w {
+		return s
+	}
+	if w == 1 {
+		return "…"
+	}
+	return string(r[:w-1]) + "…"
+}
+
+// wrapWords breaks text into lines of at most width cells. The first line is
+// prefixed with firstIndent and continuations with hangIndent, so a wrapped
+// line reads as a continuation rather than a new entry.
+func wrapWords(text string, width int, firstIndent, hangIndent string) []string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{firstIndent}
+	}
+	indent := firstIndent
+	cur := indent
+	hasWord := false
+	var lines []string
+	for _, word := range words {
+		add := word
+		if hasWord {
+			add = " " + word
+		}
+		if hasWord && lipgloss.Width(cur)+lipgloss.Width(add) > width {
+			lines = append(lines, cur)
+			indent = hangIndent
+			cur = indent
+			hasWord = false
+			add = word
+		}
+		cur += add
+		hasWord = true
+	}
+	lines = append(lines, cur)
+	return lines
+}
+
+// contentWidth is the usable width inside the box: the frame width less the
+// border and padding, capped so the dashboard does not sprawl on a wide screen.
+func (m Model) contentWidth() int {
+	w := m.width - 4
+	if w > 104 {
+		w = 104
+	}
+	if w < 32 {
+		w = 32
+	}
+	return w
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/fakih/ocsa/internal/db"
 	"github.com/fakih/ocsa/internal/paths"
@@ -261,6 +262,111 @@ func TestClampOnEmptyList(t *testing.T) {
 	m.screen = scrSessions
 	if out := m.viewSessions(); !strings.Contains(out, "SESSIONS") {
 		t.Errorf("sessions view did not render at zero height:\n%s", out)
+	}
+}
+
+// TestNoRenderedLineOverflowsTheFrame is the alignment regression. Long lines
+// used to be left to lipgloss's word wrapper, which broke them at the left
+// margin with no hanging indent, so a wrapped warning or a wide action row read
+// as a new entry. Every line now has to fit the width it was given.
+func TestNoRenderedLineOverflowsTheFrame(t *testing.T) {
+	s := fixtureScan(t)
+	for _, width := range []int{60, 70, 80, 100, 120, 160} {
+		for _, screen := range []string{"dash", "projects", "sessions", "grouped"} {
+			out := Preview(s, PreviewOptions{Screen: screen, Width: width, Height: 40})
+			for i, line := range strings.Split(out, "\n") {
+				if got := lipgloss.Width(line); got > width {
+					t.Errorf("screen %q at width %d: line %d is %d cells wide\n%q",
+						screen, width, i, got, line)
+				}
+			}
+		}
+	}
+}
+
+// TestReclaimAmountsShareAColumn checks the numbers in RECLAIMABLE are
+// right-aligned to one column, which is what makes them comparable at a glance.
+func TestReclaimAmountsShareAColumn(t *testing.T) {
+	out := Preview(fixtureScan(t), PreviewOptions{Screen: "dash", Width: 120, Height: 40})
+	rows := section(out, "RECLAIMABLE")
+	if len(rows) < 3 {
+		t.Fatalf("expected several reclaimable rows, got %d in:\n%s", len(rows), out)
+	}
+	var ends []int
+	for _, row := range rows {
+		body := strings.TrimRight(strings.TrimRight(row, " "), "│")
+		body = strings.TrimRight(body, " ")
+		ends = append(ends, lipgloss.Width(body))
+	}
+	for _, e := range ends[1:] {
+		if e != ends[0] {
+			t.Errorf("amounts are not in one column: right edges %v\n%s", ends, out)
+			break
+		}
+	}
+}
+
+// section returns the content rows following a heading, up to the next blank
+// content line. The box pads every row to the same total width, so alignment
+// has to be measured inside a row, not by total line length.
+func section(out, heading string) []string {
+	lines := strings.Split(out, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.Contains(l, heading) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	var rows []string
+	for _, l := range lines[start+1:] {
+		body := strings.TrimSpace(strings.Trim(l, "│╭╰─ "))
+		if body == "" {
+			break
+		}
+		rows = append(rows, l)
+	}
+	return rows
+}
+
+// TestTableHeadersStayOnOneLine catches what the overflow test cannot: wrapping
+// produces lines that are all short enough, so a header that broke in half
+// ("UPDATED" on its own row) passed that check but looked like corruption.
+func TestTableHeadersStayOnOneLine(t *testing.T) {
+	s := fixtureScan(t)
+	cases := []struct {
+		screen   string
+		anchor   string
+		mustHave []string
+	}{
+		{"sessions", "UPDATED", []string{"SIZE", "TITLE", "FOLDER", "UPDATED"}},
+		{"grouped", "UPDATED", []string{"SIZE", "TITLE", "FOLDER", "UPDATED"}},
+		{"projects", "LAST USED", []string{"SIZE", "SESS", "PROJECT", "FOLDER", "LAST USED"}},
+	}
+	for _, width := range []int{72, 84, 100, 120} {
+		for _, tc := range cases {
+			out := Preview(s, PreviewOptions{Screen: tc.screen, Width: width, Height: 40})
+			var header string
+			for _, line := range strings.Split(out, "\n") {
+				if strings.Contains(line, tc.anchor) {
+					header = line
+					break
+				}
+			}
+			if header == "" {
+				t.Errorf("%s at %d: no header row found", tc.screen, width)
+				continue
+			}
+			for _, want := range tc.mustHave {
+				if !strings.Contains(header, want) {
+					t.Errorf("%s at width %d: header lost %q, so it wrapped:\n%s",
+						tc.screen, width, want, header)
+				}
+			}
+		}
 	}
 }
 

@@ -35,8 +35,13 @@ func (m Model) View() string {
 	}
 }
 
-// frame wraps a body in the box and appends the footer.
+// frame wraps a body in the box and appends the footer. The header and footer
+// are fitted to the terminal width too, so nothing wraps at the left margin.
 func (m Model) frame(body string) string {
+	width := m.width
+	if width < 40 {
+		width = 40
+	}
 	head := stTitle.Render("OCSA") + stSub.Render("  "+m.p.Data)
 	if m.status != "" {
 		head += "   " + stOK.Render(m.status)
@@ -45,7 +50,7 @@ func (m Model) frame(body string) string {
 	if m.width > 6 {
 		inner = lipglossWidth(body, min(m.width-4, 104))
 	}
-	return head + "\n" + stBox.Render(inner) + "\n" + m.footer()
+	return fit(head, width) + "\n" + stBox.Render(inner) + "\n" + fit(m.footer(), width)
 }
 
 func (m Model) footer() string {
@@ -81,83 +86,159 @@ func (m Model) footer() string {
 
 func (m Model) viewDash() string {
 	s := m.scan
+	cw := m.contentWidth()
 	var b strings.Builder
 
-	// One line for the file, then one for its bookkeeping.
-	b.WriteString(stLabel.Render("DATABASE") + "  " +
-		bar(s.Stats.LiveBytes(), s.Stats.FileBytes(), 30) + "  " +
-		stValue.Render(paths.ByteSize(s.Stats.FileBytes())) + "   " +
-		stLabel.Render("live ") + stValue.Render(paths.ByteSize(s.Stats.LiveBytes())) + "   " +
-		stLabel.Render("free ") + freeStyle(s.Stats.FreeBytes()) + "   " +
-		stLabel.Render("WAL ") + stValue.Render(paths.ByteSize(s.WALBytes)) + "\n")
-	b.WriteString("          " + stLabel.Render(fmt.Sprintf("%d pages × %d B", s.Stats.PageCount, s.Stats.PageSize)) +
-		"   " + stLabel.Render("auto_vacuum ") + modeStyle(s.Stats.AutoVacuum) +
-		"   " + stLabel.Render("integrity ") + integrityStyle(s.Integrity) + "\n")
+	// The bar line, then aligned key/value pairs. Every line is sized to the
+	// content width here rather than left to the renderer's word wrapper, which
+	// would break a long line at the left margin with no hanging indent.
+	barW := 28
+	if cw < 64 {
+		barW = 14
+	}
+	b.WriteString(stLabel.Render("DATABASE") + "\n")
+	b.WriteString("  " + bar(s.Stats.LiveBytes(), s.Stats.FileBytes(), barW) + "  " +
+		stValue.Render(paths.ByteSize(s.Stats.FileBytes())) + " " +
+		stSub.Render("on disk") + "\n")
 
-	// Generations: the thing a plain size report misses.
+	pair := func(l1, v1, l2, v2 string) {
+		b.WriteString("  " + stLabel.Render(padRight(l1, 11)) +
+			stValue.Render(padLeft(v1, 10)) + "   " +
+			stLabel.Render(padRight(l2, 12)) + stValue.Render(v2) + "\n")
+	}
+	pair("live", paths.ByteSize(s.Stats.LiveBytes()), "free", paths.ByteSize(s.Stats.FreeBytes()))
+	pair("WAL", paths.ByteSize(s.WALBytes), "journal", s.Stats.JournalMode)
+	pair("pages", fmt.Sprint(s.Stats.PageCount), "auto_vacuum", modePlain(s.Stats.AutoVacuum))
+	// integrity is styled, so it cannot go through pair without breaking padding.
+	b.WriteString("  " + stLabel.Render(padRight("page size", 11)) +
+		stValue.Render(padLeft(fmt.Sprintf("%d B", s.Stats.PageSize), 10)) + "   " +
+		stLabel.Render(padRight("integrity", 12)) + integrityStyle(s.Integrity) + "\n")
+
 	if len(s.Generations) > 0 {
 		b.WriteString("\n" + stLabel.Render("GENERATIONS") + "\n")
 		for _, g := range s.Generations {
 			state := stOK.Render("live")
 			if g.Frozen {
-				state = stWarn.Render("FROZEN since " + g.LastWrite.Format("2006-01-02"))
+				state = stWarn.Render("frozen since " + g.LastWrite.Format("2006-01-02"))
 			}
 			b.WriteString("  " + stValue.Render(padLeft(paths.ByteSize(g.Bytes), 10)) + "  " +
-				stText.Render(padRight(g.Name, 14)) + state + "\n")
+				stText.Render(padRight(fit(g.Name, 14), 14)) + state + "\n")
 		}
 	}
 
+	// Reclaimable: one row per source, amounts right-aligned to one column so
+	// they can be compared without reading the labels.
 	r := s.Reclaim
 	b.WriteString("\n" + stLabel.Render("RECLAIMABLE") + "  " +
-		stGoodBar.Render(paths.ByteSize(r.Total)) + stSub.Render("   free pages "+
-		paths.ByteSize(r.DBFree)+" · snapshots "+paths.ByteSize(r.SnapshotPrunable)+
-		" · log "+paths.ByteSize(r.LogReclaimable)))
-	if r.LegacyBytes > 0 {
-		b.WriteString(stSub.Render("   |   frozen " + paths.ByteSize(r.LegacyBytes) + " needs row deletion"))
+		stGoodBar.Render(paths.ByteSize(r.Total)) + "\n")
+	const amountW = 10
+	labelW := cw - amountW - 4
+	if labelW < 18 {
+		labelW = 18
 	}
-	b.WriteString("\n")
+	rows := []struct {
+		label string
+		value int64
+		faint bool
+	}{
+		{"free pages", r.DBFree, false},
+		{"snapshots, newest " + fmt.Sprint(storage.SnapshotKeepRecent()) + " kept", r.SnapshotPrunable, false},
+		{"log, 1 MB kept", r.LogReclaimable, false},
+		{"orphan rows", r.OrphanBytes, false},
+	}
+	for _, row := range rows {
+		if row.value == 0 && row.label == "orphan rows" {
+			continue
+		}
+		b.WriteString("  " + stSub.Render(padRight(fit(row.label, labelW), labelW)) +
+			stValue.Render(padLeft(paths.ByteSize(row.value), amountW)) + "\n")
+	}
+	if r.LegacyBytes > 0 {
+		b.WriteString("  " + stWarn.Render(padRight(
+			fit("frozen generation, needs row deletion", labelW), labelW)) +
+			stWarn.Render(padLeft(paths.ByteSize(r.LegacyBytes), amountW)) + "\n")
+	}
 
-	b.WriteString("\n" + stLabel.Render("SESSIONS") + "  " + stValue.Render(
-		plural(len(s.Sessions), "session")+" · "+plural(len(s.Projects), "project")+" · "+
-			paths.ByteSize(sessionTotal(s))+" of payload · biggest "+
-			paths.ByteSize(biggestSession(s))) + "\n")
+	b.WriteString("\n" + stLabel.Render("SESSIONS") + "\n")
+	b.WriteString("  " + stValue.Render(plural(len(s.Sessions), "session")+" · "+
+		plural(len(s.Projects), "project")+" · "+paths.ByteSize(sessionTotal(s))+
+		" of payload · biggest "+paths.ByteSize(biggestSession(s))) + "\n")
 
-	// The action menu, navigable with the arrows.
+	// The action menu, navigable with the arrows. The hint column absorbs
+	// whatever width is left, so the key column always lines up.
 	b.WriteString("\n" + stLabel.Render("ACTIONS") + "\n")
 	items := m.menu()
+	const labelCol = 30
+	keyW := 0
+	for _, it := range items {
+		if len(it.key)+2 > keyW {
+			keyW = len(it.key) + 2
+		}
+	}
+	hintW := cw - 2 - 2 - labelCol - 1 - keyW - 2
 	for i, it := range items {
 		marker := "  "
-		label := stText.Render(padRight(it.label, 30))
+		label := stText.Render(padRight(fit(it.label, labelCol), labelCol))
 		if i == m.cursor {
 			marker = stCursor.Render("▸ ")
-			label = stSelected.Render(padRight(" "+it.label+" ", 30))
+			label = stSelected.Render(padRight(" "+it.label+" ", labelCol))
 		}
-		line := "  " + marker + label + " " + stSub.Render(it.hint)
+		line := "  " + marker + label + " "
+		if hintW > 8 {
+			line += stSub.Render(padRight(fit(it.hint, hintW), hintW))
+		}
 		if it.key != "" {
-			line += "  " + stKey.Render("["+it.key+"]")
+			line += "  " + stKey.Render(padLeft("["+it.key+"]", keyW))
 		}
 		b.WriteString(strings.TrimRight(line, " ") + "\n")
 	}
 
+	warnings := 0
 	for _, w := range s.Warnings {
 		if strings.Contains(w, "free pages") {
-			continue // already shown on the reclaimable line
+			continue // already a row in RECLAIMABLE
 		}
-		b.WriteString("\n  " + stWarn.Render("! ") + stSub.Render(w))
+		if warnings == 0 {
+			b.WriteString("\n")
+		}
+		warnings++
+		for _, line := range wrapWords(w, cw, "  "+stWarn.Render("! "), "    ") {
+			b.WriteString(line + "\n")
+		}
 	}
 	return m.frame(strings.TrimRight(b.String(), "\n"))
 }
 
-func freeStyle(free int64) string {
-	if free == 0 {
-		return stOK.Render("0 B")
+// modePlain is the unstyled auto_vacuum mode, for the aligned key/value grid
+// where a styled cell would break the column padding.
+func modePlain(v int) string {
+	switch v {
+	case 1:
+		return "full"
+	case 2:
+		return "incremental"
+	default:
+		return "none"
 	}
-	return stWarn.Render(paths.ByteSize(free))
 }
 
 func (m Model) viewProjects() string {
 	rows := m.projectRows()
+	cw := m.contentWidth()
 	var b strings.Builder
+
+	// Column widths are derived from the frame, not hardcoded: a fixed table
+	// wraps its own header on a narrow terminal, which reads as corruption.
+	const sizeW, sessW = 10, 5
+	projW := 22
+	if cw < 84 {
+		projW = 16
+	}
+	lastW := len("LAST USED")
+	folderW := cw - (2 + sizeW + 2 + sessW + 2 + projW + 2 + 2 + lastW)
+	if folderW < 16 {
+		folderW = 16
+	}
 
 	var totalBytes int64
 	var totalSessions int
@@ -168,8 +249,8 @@ func (m Model) viewProjects() string {
 	b.WriteString(fmt.Sprintf("%s  %s\n\n", stLabel.Render("PROJECTS"),
 		stSub.Render(plural(len(rows), "project")+" · "+plural(totalSessions, "session")+
 			" · "+paths.ByteSize(totalBytes)+" of session payload")))
-	b.WriteString("  " + stLabel.Render(padLeft("SIZE", 10)+"  "+padLeft("SESS", 5)+"  "+
-		padRight("PROJECT", 22)+"  "+padRight("FOLDER", 40)+"  "+"LAST USED") + "\n")
+	b.WriteString("  " + stLabel.Render(padLeft("SIZE", sizeW)+"  "+padLeft("SESS", sessW)+"  "+
+		padRight("PROJECT", projW)+"  "+padRight("FOLDER", folderW)+"  "+"LAST USED") + "\n")
 
 	visible := m.visibleRows()
 	end := min(m.offset+visible, len(rows))
@@ -177,16 +258,17 @@ func (m Model) viewProjects() string {
 		p := rows[i]
 		gone := ""
 		folderStyle := stSub
+		folderRoom := folderW
 		if p.DirGone {
 			gone = " " + stWarn.Render("gone")
 			folderStyle = stWarn
+			folderRoom = folderW - len(" gone")
 		}
-		label := projectLabel(p)
-		row := "  " + stValue.Render(padLeft(paths.ByteSize(p.Bytes), 10)) + "  " +
-			stValue.Render(padLeft(fmt.Sprint(p.Sessions), 5)) + "  " +
-			stRow.Render(padRight(trunc(label, 22), 22)) + "  " +
-			folderStyle.Render(padRight(trunc(shortenPath(p.Worktree), 40), 40)) + "  " +
-			stSub.Render(ago(p.LastUsed)) + gone
+		row := "  " + stValue.Render(padLeft(paths.ByteSize(p.Bytes), sizeW)) + "  " +
+			stValue.Render(padLeft(fmt.Sprint(p.Sessions), sessW)) + "  " +
+			stRow.Render(padRight(fit(projectLabel(p), projW), projW)) + "  " +
+			folderStyle.Render(padRight(fit(shortenPath(p.Worktree), folderRoom), folderRoom)) + "  " +
+			stSub.Render(padLeft(ago(p.LastUsed), lastW)) + gone
 		if i == m.cursor {
 			row = " " + stCursor.Render("▸") + strings.TrimPrefix(row, "  ")
 		}
@@ -203,7 +285,29 @@ func (m Model) viewProjects() string {
 
 func (m Model) viewSessions() string {
 	rows := m.sessionRows()
+	cw := m.contentWidth()
 	var b strings.Builder
+
+	// Same principle as projects: the flexible columns take what is left, so
+	// the header and the rows agree on where every column starts.
+	const sizeW, updW = 10, 9
+	folderW := 30
+	if cw < 96 {
+		folderW = 22
+	}
+	if cw < 76 {
+		folderW = 16
+	}
+	if folderW > cw/3 {
+		folderW = cw / 3
+	}
+	titleW := cw - (2 + sizeW + 2 + 2 + folderW + 2 + updW)
+	if titleW < 16 {
+		titleW = 16
+		if shrink := cw - (2 + sizeW + 2 + 2 + titleW + 2 + updW); shrink > 10 {
+			folderW = shrink
+		}
+	}
 
 	var total int64
 	for _, si := range rows {
@@ -234,8 +338,8 @@ func (m Model) viewSessions() string {
 		count[si.Directory]++
 	}
 
-	b.WriteString("  " + stLabel.Render(padLeft("SIZE", 10)+"  "+padRight("TITLE", 46)+"  "+
-		padRight("FOLDER", 30)+"  "+"UPDATED") + "\n")
+	b.WriteString("  " + stLabel.Render(padLeft("SIZE", sizeW)+"  "+
+		padRight("TITLE", titleW)+"  "+padRight("FOLDER", folderW)+"  "+"UPDATED") + "\n")
 
 	visible := m.visibleRows()
 	end := min(m.offset+visible, len(rows))
@@ -248,13 +352,15 @@ func (m Model) viewSessions() string {
 			if si.DirGone {
 				dirStyle = stWarn
 			}
-			b.WriteString("\n  " + dirStyle.Render(shortenPath(si.Directory)) +
+			head := "  " + dirStyle.Render(fit(shortenPath(si.Directory), cw-22)) +
 				stSub.Render("   "+paths.ByteSize(subtotal[si.Directory])+" · "+
-					plural(count[si.Directory], "session")) + "\n")
+					plural(count[si.Directory], "session"))
+			b.WriteString("\n" + fit(head, cw) + "\n")
 		}
-		row := "  " + stValue.Render(padLeft(paths.ByteSize(si.Bytes), 10)) + "  " +
-			stRow.Render(padRight(trunc(si.Title, 46), 46)) + "  " +
-			folderCell(si) + "  " + stSub.Render(ago(si.Updated))
+		row := "  " + stValue.Render(padLeft(paths.ByteSize(si.Bytes), sizeW)) + "  " +
+			stRow.Render(padRight(fit(si.Title, titleW), titleW)) + "  " +
+			folderCell(si, folderW) + "  " +
+			stSub.Render(padLeft(ago(si.Updated), updW))
 		if i == m.cursor {
 			row = " " + stCursor.Render("▸") + strings.TrimPrefix(row, "  ")
 		}
@@ -269,8 +375,14 @@ func (m Model) viewSessions() string {
 	return m.frame(strings.TrimRight(b.String(), "\n"))
 }
 
-func folderCell(si storage.SessionInfo) string {
-	label := padRight(trunc(shortenPath(si.Directory), 30), 30)
+// folderCell renders the folder column at a caller-chosen width, so the column
+// budget and the render agree.
+func folderCell(si storage.SessionInfo, width int) string {
+	room := width
+	if si.DirGone {
+		room -= len(" gone")
+	}
+	label := padRight(fit(shortenPath(si.Directory), room), room)
 	if si.DirGone {
 		return stWarn.Render(label)
 	}

@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt vet check run preview tidy snapshot release
+.PHONY: build test lint fmt vet check run preview tidy snapshot release token-store help
 
 BIN := ocsa
 
@@ -30,10 +30,13 @@ tidy: ## tidy the module
 	go mod tidy
 
 snapshot: ## build release artifacts locally without publishing
-	TAP_GITHUB_TOKEN=$${TAP_GITHUB_TOKEN:-unset} goreleaser release --snapshot --clean --skip=publish
+	goreleaser release --snapshot --clean --skip=publish
 
-release: ## publish a release; needs TAP_GITHUB_TOKEN, and a tag already pushed
-	TAP_GITHUB_TOKEN=$${TAP_GITHUB_TOKEN:?set TAP_GITHUB_TOKEN first} goreleaser release --clean
+release: ## tag and release, updating the Homebrew tap; V=1.2.3
+	./scripts/release.sh $(V)
+
+token-store: ## save the Homebrew tap token in the macOS keychain
+	./scripts/release.sh --store-token
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'

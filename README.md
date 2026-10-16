@@ -154,19 +154,49 @@ one asserts that no action can write without a confirmation.
 
 ## Releasing
 
-GoReleaser drives all three channels — GitHub releases, the Homebrew formula in
-`fakihariefnoto/homebrew-tap`, and `go install` via the module path.
+GoReleaser drives all three channels: GitHub releases, the Homebrew formula in
+`fakihariefnoto/homebrew-tap`, and `go install` via the module path. Pushing to
+the tap needs a token — a fine-grained PAT with **Contents: read and write** on
+`fakihariefnoto/homebrew-tap` and nothing else. There are two ways to give it to
+GoReleaser.
+
+**Locally.** The token stays on your machine, in the macOS keychain:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
-TAP_GITHUB_TOKEN=<token> goreleaser release --clean
+./scripts/release.sh --store-token   # once; prompts, input hidden
+make release V=0.1.0                 # tag, push, build, publish
+make release V=0.1.0 --dry-run       # see the plan first
 ```
 
-The token needs `Contents: read and write` on the tap repository. The
-`release.yml` workflow does the same thing on GitHub with a `TAP_GITHUB_TOKEN`
-secret. Note that `goreleaser check` currently exits non-zero because `brews` is
-deprecated in favour of `homebrew_casks`; casks are macOS-only, so the formula is
-kept deliberately — it serves Linux installs too.
+The script refuses to run on a dirty tree, off `main`, ahead of the remote, or
+with a tag that already exists — so a half-pushed release is not a thing that
+happens. `TAP_GITHUB_TOKEN` in the environment overrides the keychain.
+
+**In GitHub Actions.** Add the PAT as a repository secret named
+`TAP_GITHUB_TOKEN`, then push a tag (`v0.1.0`), or run the `release` workflow
+manually with the tag as input. Nothing runs with credentials on your machine.
+
+### Is a secret safe in a public repo?
+
+Yes — repository secrets are not readable, by anyone, including you. Once saved
+they are encrypted, shown only as a name, and cannot be read back through the UI
+or the API. GitHub redacts them from logs, and workflows triggered by a fork's
+pull request do not receive them at all.
+
+The real trust boundary is not public visibility, it is **who can write to the
+repository**: anyone able to merge a workflow file can write a step that prints a
+secret. That is why the PAT should be fine-grained and scoped to the single tap
+repository — if it ever leaked, the worst case is someone pushing to your tap,
+not your account.
+
+If you would rather not have any token in GitHub at all, use the local path
+above; the workflow is optional.
+
+### A note on `goreleaser check`
+
+It exits non-zero because `brews` is deprecated in favour of `homebrew_casks`.
+That is deliberate: casks are macOS-only, and the formula in this repo also
+serves the Linux archives. Recorded here so the warning is not a surprise.
 
 ## Licence
 
