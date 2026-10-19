@@ -10,19 +10,37 @@ git tag v0.1.0  ──▶  goreleaser  ──▶  GitHub release (archives + che
                                   ──▶  go install github.com/fakihariefnoto/ocsa@v0.1.0
 ```
 
-## The token
+## Credentials
 
-Pushing a formula to a second repository needs a token: a fine-grained personal
-access token with **Contents: read and write** on
-`fakihariefnoto/homebrew-tap`, and nothing else. There are two ways to give it to
-GoReleaser, and the second is optional.
+Publishing needs a credential that can create a release on `ocsa` and push to
+`homebrew-tap`. **You probably already have one**: if `git push` works from this
+machine, git stores a credential for github.com, and it can do both. No personal
+access token has to exist.
 
-### Locally, token never leaves the machine
+The script resolves one in this order:
+
+1. `TAP_GITHUB_TOKEN` in the environment
+2. a token saved with `--store-token`, in the macOS keychain
+3. **the credential git already stores for github.com** — the same one `git
+   push` uses
+
+Check what you have:
 
 ```sh
-./scripts/release.sh --store-token   # once; prompts, input hidden, saves to the keychain
-make release V=0.1.0                 # tag, push, build, publish, update the tap
+printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+```
+
+If that prints a password, you are done. If it does not, either push something
+once (git will offer to store a credential), or create a fine-grained PAT with
+**Contents: read and write** on `fakihariefnoto/homebrew-tap` and pass it through
+one of the first two steps.
+
+### Locally
+
+```sh
 make release V=0.1.0 --dry-run       # print the plan and stop
+make release V=0.1.0                 # tag, push, build, publish, update the tap
+./scripts/release.sh --store-token   # only if you need to save a token by hand
 ```
 
 The script refuses to run when it would produce a half-finished release:
@@ -35,8 +53,10 @@ The script refuses to run when it would produce a half-finished release:
 | tag does not exist, locally or remotely | re-tagging is how versions get lost |
 | token present | otherwise goreleaser fails after the tag is already pushed |
 
-`TAP_GITHUB_TOKEN` in the environment overrides the keychain, which is useful in
-CI or a one-off shell.
+`TAP_GITHUB_TOKEN` in the environment overrides everything, which is useful in
+CI or a one-off shell. The tap clone in `~/Projects/dist/...` is not used by the
+release: goreleaser commits the formula through the API, so a stale local clone
+cannot disagree with what gets published.
 
 ### In GitHub Actions, nothing on your machine
 

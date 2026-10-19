@@ -253,8 +253,11 @@ whole procedure, including the tap token and how to verify a release without
 publishing one, is in [RELEASING.md](RELEASING.md).
 
 ```sh
-make release V=0.1.0     # after ./scripts/release.sh --store-token once
+make release V=0.1.0     # uses the git credential you already have
 ```
+
+No personal access token is needed if `git push` works from this machine; the
+script falls back to the credential git stores for github.com.
 
 ## Licence
 
