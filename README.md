@@ -133,6 +133,7 @@ first sign of clutter worth removing.
 ### What it does without the dashboard
 
 ```sh
+ocsa status                # who holds the database, and is it safe to run now
 ocsa scan                  # the summary, no TUI
 ocsa claim                 # the safe sweep; prints the plan, dry run without --yes
 ocsa sessions --group      # sessions by folder
@@ -183,6 +184,25 @@ another terminal, mid-conversation.
 
 `scan`, `sessions`, `projects` and `preview` only ever read.
 
+### It never stops OpenCode
+
+Worth stating plainly, because it is what people expect a tool like this to do:
+`ocsa` does not kill, signal or restart anything. The only `os/exec` calls in
+the source run `opencode debug paths` and `lsof`, both read-only. There is no
+`SIGTERM` anywhere in the tree.
+
+That is a design choice, not an omission. A rewrite does not need OpenCode to be
+stopped — SQLite handles concurrent access, and the operation rolls back
+completely if it cannot get the lock. Killing a terminal you are working in
+would be a far worse outcome than waiting a second for a gap between messages.
+
+If you *do* want it stopped, that is yours to do:
+
+```sh
+ocsa status                      # says who holds the database and whether it is busy
+opencode service stop            # note: a running TUI may respawn the service
+```
+
 ### When OpenCode is mid-message
 
 Being open is fine — readers do not block a rewrite. Being *mid-write* is not,
@@ -228,49 +248,13 @@ one asserts that no action can write without a confirmation.
 
 ## Releasing
 
-GoReleaser drives all three channels: GitHub releases, the Homebrew formula in
-`fakihariefnoto/homebrew-tap`, and `go install` via the module path. Pushing to
-the tap needs a token — a fine-grained PAT with **Contents: read and write** on
-`fakihariefnoto/homebrew-tap` and nothing else. There are two ways to give it to
-GoReleaser.
-
-**Locally.** The token stays on your machine, in the macOS keychain:
+Builds, GitHub releases and the Homebrew formula are driven by GoReleaser. The
+whole procedure, including the tap token and how to verify a release without
+publishing one, is in [RELEASING.md](RELEASING.md).
 
 ```sh
-./scripts/release.sh --store-token   # once; prompts, input hidden
-make release V=0.1.0                 # tag, push, build, publish
-make release V=0.1.0 --dry-run       # see the plan first
+make release V=0.1.0     # after ./scripts/release.sh --store-token once
 ```
-
-The script refuses to run on a dirty tree, off `main`, ahead of the remote, or
-with a tag that already exists — so a half-pushed release is not a thing that
-happens. `TAP_GITHUB_TOKEN` in the environment overrides the keychain.
-
-**In GitHub Actions.** Add the PAT as a repository secret named
-`TAP_GITHUB_TOKEN`, then push a tag (`v0.1.0`), or run the `release` workflow
-manually with the tag as input. Nothing runs with credentials on your machine.
-
-### Is a secret safe in a public repo?
-
-Yes — repository secrets are not readable, by anyone, including you. Once saved
-they are encrypted, shown only as a name, and cannot be read back through the UI
-or the API. GitHub redacts them from logs, and workflows triggered by a fork's
-pull request do not receive them at all.
-
-The real trust boundary is not public visibility, it is **who can write to the
-repository**: anyone able to merge a workflow file can write a step that prints a
-secret. That is why the PAT should be fine-grained and scoped to the single tap
-repository — if it ever leaked, the worst case is someone pushing to your tap,
-not your account.
-
-If you would rather not have any token in GitHub at all, use the local path
-above; the workflow is optional.
-
-### A note on `goreleaser check`
-
-It exits non-zero because `brews` is deprecated in favour of `homebrew_casks`.
-That is deliberate: casks are macOS-only, and the formula in this repo also
-serves the Linux archives. Recorded here so the warning is not a surprise.
 
 ## Licence
 

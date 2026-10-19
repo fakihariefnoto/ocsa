@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -54,15 +56,27 @@ func (l *Lock) Release() error {
 	return closeErr
 }
 
-// LockHolder reports the pid recorded in the lock file, for messages.
+// LockHolder reports the pid recorded in the lock file, for messages. It
+// returns "" when the file is absent, unreadable, or names a process that no
+// longer exists: a lock file outlives the process that wrote it whenever ocsa is
+// killed, and reporting that as "another ocsa is working" would send the reader
+// hunting for something that is not there. flock itself is released by the
+// kernel on exit, so a stale file never actually blocks AcquireLock.
 func LockHolder(dataDir string) string {
 	b, err := os.ReadFile(filepath.Join(dataDir, LockFileName))
 	if err != nil {
 		return ""
 	}
-	s := string(b)
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == ' ') {
-		s = s[:len(s)-1]
+	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return ""
+	}
+	pid, err := strconv.Atoi(s)
+	if err != nil {
+		return ""
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		return "" // gone, so the lock is stale
 	}
 	return s
 }

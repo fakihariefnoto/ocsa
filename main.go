@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/fakih/ocsa/internal/actions"
+	"github.com/fakih/ocsa/internal/db"
 	"github.com/fakih/ocsa/internal/paths"
 	"github.com/fakih/ocsa/internal/report"
 	"github.com/fakih/ocsa/internal/storage"
@@ -157,6 +158,19 @@ func run(args []string) int {
 		}
 		fmt.Printf("\n  OpenCode at the time: %s\n", res.Activity.Summary)
 		return exitCodeFor(err)
+	case "status":
+		s := scanOrDie(p)
+		activity, err := db.Probe(p.DB)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "probe failed:", err)
+			return 3
+		}
+		holder := actions.LockHolder(p.Data)
+		if *o.asJSON {
+			return emitValue(report.BuildStatus(p, s, activity, holder))
+		}
+		report.Status(os.Stdout, p, s, activity, holder)
+		return 0
 	case "incremental", "incr":
 		res, err := actions.Incremental(p)
 		return emitResult(res, err, *o.asJSON)
@@ -411,6 +425,17 @@ func runReport(p paths.Paths, out string) int {
 	return 0
 }
 
+// emitValue writes any value as indented JSON.
+func emitValue(v any) int {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
 // printPlan shows what a claim would do, including what it will skip and why.
 func printPlan(plan actions.Plan) {
 	fmt.Println("plan:")
@@ -480,6 +505,7 @@ commands:
   scan                   print the storage summary        [--json]
   sessions               list sessions by size            [--sort bytes|updated|messages|cost|folder] [--limit N] [--group] [--json]
   projects               storage usage per project and folder [--limit N] [--json]
+  status                 who holds the database, and is it safe to run now  [--json]
   claim                  do everything safe in one pass     [--yes] [--force] [--include-snapshots] [--wait 30s]
   vacuum                 rewrite the database in place    [--yes] [--force]
   incremental            return free pages incrementally
