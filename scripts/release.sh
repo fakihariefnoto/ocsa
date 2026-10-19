@@ -151,9 +151,15 @@ if [ "$STORE_TOKEN" = "1" ]; then
 fi
 
 # latest_tag is the highest v* tag by version order, not by creation date: a
-# backported patch would otherwise become the base for the next release.
+# backported patch would otherwise become the base for the next release. It
+# reads the remote as well as the local repository, because a release can be
+# published from another machine.
 latest_tag() {
-	git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1
+	{
+		git tag -l 'v[0-9]*.[0-9]*.[0-9]*'
+		git ls-remote --tags --refs origin 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null |
+			sed 's|.*refs/tags/||'
+	} | sort -V | tail -1
 }
 
 # bump takes the last tag and returns the next version. With no tag the first
@@ -182,17 +188,22 @@ bump() {
 }
 
 LAST_TAG="$(latest_tag)"
-case "$VERSION" in
+REQUESTED="$VERSION"
+case "$REQUESTED" in
 "")
 	# Default: a patch bump, which is the common case for a fix.
-	VERSION="$(bump "${LAST_TAG:-v0.0.0}" patch)"
-	[ -n "$LAST_TAG" ] || VERSION="0.1.0"
-	DERIVED="patch bump from ${LAST_TAG:-no tag}"
+	if [ -n "$LAST_TAG" ]; then
+		VERSION="$(bump "$LAST_TAG" patch)"
+		DERIVED="patch bump from $LAST_TAG"
+	else
+		VERSION="0.1.0"
+		DERIVED="first release"
+	fi
 	;;
 major | minor | patch)
 	VERSION="$(bump "${LAST_TAG:-v0.0.0}" "$VERSION")"
 	[ -n "$LAST_TAG" ] || VERSION="0.1.0"
-	DERIVED="$1 bump from ${LAST_TAG:-no tag}"
+	DERIVED="$REQUESTED bump from ${LAST_TAG:-no tag}"
 	;;
 *)
 	[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
@@ -221,7 +232,7 @@ REMOTE="$(git remote get-url origin 2>/dev/null || true)"
 # Compare against the remote as it is now: a stale origin/main would let an
 # unpushed commit through.
 say "Fetching origin"
-git fetch --quiet origin main 2>/dev/null ||
+git fetch --quiet --tags origin main 2>/dev/null ||
 	warn "could not reach origin; comparing against the local origin/main"
 
 [ -z "$(git log origin/main..HEAD 2>/dev/null)" ] ||
