@@ -9,12 +9,23 @@
 # secret there.
 #
 # Usage:
-#   ./scripts/release.sh --store-token     # save the tap token in the keychain
 #   ./scripts/release.sh 0.1.0             # tag, push, build, publish
 #   ./scripts/release.sh 0.1.0 --dry-run   # show what would happen
+#   ./scripts/release.sh --store-token     # optional: save a token explicitly
 #
-# The token is a fine-grained PAT with "Contents: read and write" on
-# fakihariefnoto/homebrew-tap, and nothing else.
+# The token is only needed to publish: the GitHub release, and the formula
+# commit to fakihariefnoto/homebrew-tap. If you have pushed to GitHub from this
+# machine before, git already stores a credential that can do both, and this
+# script uses it. No personal access token has to exist.
+#
+# Resolution order:
+#   1. TAP_GITHUB_TOKEN in the environment
+#   2. a token saved with --store-token, in the macOS keychain
+#   3. the credential git already stores for github.com
+#
+# Any of them must be able to push to the tap repository. For (3) that is the
+# same credential `git push` uses, so if `git push origin main` works, this
+# works.
 
 set -euo pipefail
 
@@ -78,8 +89,17 @@ store_token() {
 	say "Stored. Verify with: security find-generic-password -s $TOKEN_SERVICE >/dev/null && echo ok"
 }
 
-# token_from returns the token from the environment, else the keychain.
-token_from() {
+# git_credential asks git for the credential it already stores for github.com.
+# This is the one `git push` uses, so a machine that can push can release.
+git_credential() {
+	command -v git >/dev/null 2>&1 || return 1
+	printf 'protocol=https\nhost=github.com\n\n' |
+		git credential fill 2>/dev/null |
+		sed -n 's/^password=//p'
+}
+
+# token_source reports where a usable token would come from, or fails.
+token_source() {
 	if [ -n "${TAP_GITHUB_TOKEN:-}" ]; then
 		printf 'environment'
 		return 0
@@ -87,6 +107,10 @@ token_from() {
 	if command -v security >/dev/null 2>&1 &&
 		security find-generic-password -s "$TOKEN_SERVICE" >/dev/null 2>&1; then
 		printf 'keychain'
+		return 0
+	fi
+	if [ -n "$(git_credential)" ]; then
+		printf 'git credential'
 		return 0
 	fi
 	return 1
@@ -97,8 +121,17 @@ load_token() {
 		export TAP_GITHUB_TOKEN
 		return 0
 	fi
-	TAP_GITHUB_TOKEN="$(security find-generic-password -a "$TOKEN_ACCOUNT" -s "$TOKEN_SERVICE" -w)"
+	if command -v security >/dev/null 2>&1 &&
+		security find-generic-password -s "$TOKEN_SERVICE" >/dev/null 2>&1; then
+		TAP_GITHUB_TOKEN="$(security find-generic-password -a "$TOKEN_ACCOUNT" -s "$TOKEN_SERVICE" -w)"
+		export TAP_GITHUB_TOKEN
+		return 0
+	fi
+	TAP_GITHUB_TOKEN="$(git_credential)"
 	export TAP_GITHUB_TOKEN
+	# goreleaser wants a token for the release upload too; the same credential
+	# is used for both, which is why one variable is enough.
+	export GITHUB_TOKEN="$TAP_GITHUB_TOKEN"
 }
 
 if [ "$STORE_TOKEN" = "1" ]; then
@@ -146,10 +179,10 @@ fi
 command -v goreleaser >/dev/null 2>&1 || die "goreleaser is not installed"
 
 SOURCE=""
-if ! SOURCE="$(token_from)"; then
-	die "no tap token: run ./scripts/release.sh --store-token, or export TAP_GITHUB_TOKEN"
+if ! SOURCE="$(token_source)"; then
+	die "no credential for GitHub: run ./scripts/release.sh --store-token, export TAP_GITHUB_TOKEN, or push something with git first"
 fi
-say "Tap token found in the $SOURCE"
+say "GitHub credential found in the $SOURCE"
 
 # --- plan -------------------------------------------------------------------
 
@@ -158,7 +191,7 @@ cat <<EOF
   version   $VERSION  (tag $TAG)
   branch    $BRANCH
   remote    $REMOTE
-  tap       $TAP_REPO  (via $SOURCE token)
+  tap       $TAP_REPO  (via $SOURCE)
   targets   darwin+linux, amd64+arm64
 
   This will:
