@@ -9,9 +9,14 @@
 # secret there.
 #
 # Usage:
-#   ./scripts/release.sh 0.1.0             # tag, push, build, publish
-#   ./scripts/release.sh 0.1.0 --dry-run   # show what would happen
+#   ./scripts/release.sh                   # patch bump from the last tag
+#   ./scripts/release.sh minor             # or major|minor|patch
+#   ./scripts/release.sh 0.1.0             # an explicit version
+#   ./scripts/release.sh --dry-run         # show what would happen
 #   ./scripts/release.sh --store-token     # optional: save a token explicitly
+#
+# The version comes from the highest v* tag, not from a file, so the tag is the
+# single source of truth and cannot drift from what was published.
 #
 # The token is only needed to publish: the GitHub release, and the formula
 # commit to fakihariefnoto/homebrew-tap. If you have pushed to GitHub from this
@@ -53,12 +58,18 @@ on this machine at all, use the GitHub Actions workflow instead
 secret there.
 
 Usage:
-  ./scripts/release.sh --store-token     # save the tap token in the keychain
-  ./scripts/release.sh 0.1.0             # tag, push, build, publish
-  ./scripts/release.sh 0.1.0 --dry-run   # show what would happen
+  ./scripts/release.sh                   # patch bump from the last tag
+  ./scripts/release.sh minor             # major | minor | patch
+  ./scripts/release.sh 0.1.0             # an explicit version
+  ./scripts/release.sh --dry-run         # print the plan and stop
+  ./scripts/release.sh --store-token     # save a token in the keychain
 
-The token is a fine-grained PAT with "Contents: read and write" on
-fakihariefnoto/homebrew-tap, and nothing else.
+With no version and no bump, the next patch version is derived from the highest
+v* tag. With no tag at all, the first release is 0.1.0.
+
+Credentials, in order: TAP_GITHUB_TOKEN, the keychain, then the credential git
+already stores for github.com. The last one means no personal access token has
+to exist if `git push` works here.
 EOF
 }
 
@@ -139,13 +150,61 @@ if [ "$STORE_TOKEN" = "1" ]; then
 	exit 0
 fi
 
-[ -n "$VERSION" ] || {
-	usage
-	die "give a version, e.g. ./scripts/release.sh 0.1.0"
+# latest_tag is the highest v* tag by version order, not by creation date: a
+# backported patch would otherwise become the base for the next release.
+latest_tag() {
+	git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1
 }
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-	die "version must look like 1.2.3 (got \"$VERSION\")"
+
+# bump takes the last tag and returns the next version. With no tag the first
+# release is 0.1.0: 1.0.0 would promise an API that does not exist yet.
+bump() {
+	local base="${1:-v0.0.0}" kind="$2"
+	local major minor patch
+	IFS=. read -r major minor patch <<<"${base#v}"
+	major="${major:-0}"
+	minor="${minor:-0}"
+	patch="${patch:-0}"
+	case "$kind" in
+	major)
+		major=$((major + 1))
+		minor=0
+		patch=0
+		;;
+	minor)
+		minor=$((minor + 1))
+		patch=0
+		;;
+	patch) patch=$((patch + 1)) ;;
+	*) die "unknown bump \"$kind\"; use major, minor or patch" ;;
+	esac
+	printf '%s.%s.%s' "$major" "$minor" "$patch"
+}
+
+LAST_TAG="$(latest_tag)"
+case "$VERSION" in
+"")
+	# Default: a patch bump, which is the common case for a fix.
+	VERSION="$(bump "${LAST_TAG:-v0.0.0}" patch)"
+	[ -n "$LAST_TAG" ] || VERSION="0.1.0"
+	DERIVED="patch bump from ${LAST_TAG:-no tag}"
+	;;
+major | minor | patch)
+	VERSION="$(bump "${LAST_TAG:-v0.0.0}" "$VERSION")"
+	[ -n "$LAST_TAG" ] || VERSION="0.1.0"
+	DERIVED="$1 bump from ${LAST_TAG:-no tag}"
+	;;
+*)
+	[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+		die "version must look like 1.2.3, or be major|minor|patch (got \"$VERSION\")"
+	DERIVED="explicit"
+	;;
+esac
 TAG="v$VERSION"
+
+if [ -n "$LAST_TAG" ] && [ "$(printf '%s\n%s\n' "${LAST_TAG#v}" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+	die "$VERSION is not newer than the last release $LAST_TAG"
+fi
 
 # --- preconditions ----------------------------------------------------------
 
@@ -188,7 +247,7 @@ say "GitHub credential found in the $SOURCE"
 
 cat <<EOF
 
-  version   $VERSION  (tag $TAG)
+  version   $VERSION  (tag $TAG, $DERIVED)
   branch    $BRANCH
   remote    $REMOTE
   tap       $TAP_REPO  (via $SOURCE)
