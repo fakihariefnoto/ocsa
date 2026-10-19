@@ -1,6 +1,11 @@
 # ocsa
 
-**See where OpenCode's disk space went, and take it back.**
+**OpenCode Storage Analytics** — see where OpenCode's disk space went, and take
+it back.
+
+<p align="center">
+  <img src="ocsa-main.png" alt="ocsa dashboard: database composition bar, reclaimable space, and the action menu" width="820">
+</p>
 
 OpenCode keeps everything in one SQLite database. That database only ever grows:
 SQLite is told never to shrink the file, so pages freed by old conversations sit
@@ -10,33 +15,17 @@ real data** — and 379 MB of that "real data" turned out to be a copy of itself
 `ocsa` shows you the whole picture in a terminal dashboard and cleans it up
 without stopping OpenCode.
 
-```
-DATABASE
-
-  ████████████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒░  565.4 MB on disk
-  ██ live          178.3 MB   31.5%  the generation OpenCode writes to
-  ▓▓ frozen        379.5 MB   67.1%  abandoned tables, last written 2026-09-22
-  ▒▒ other           7.6 MB    1.3%  indexes, key/value state, schema
-  ░░ reclaimable     8.0 KB    0.0%  free pages a vacuum would return
-  3.2× the live data  ·  10.5% of the 5.3 GB free on disk
-
-RECLAIMABLE  125.2 MB
-  snapshots, newest 5 kept                                        124.8 MB
-  log, 1 MB kept                                                   40.9 MB
-```
-
-A reclaimable figure near zero is the *good* state, not a bug: SQLite reuses
-freed pages before growing the file, so on a database that is being used
-normally there is nothing sitting in the freelist to return. It only piles up
-when whole pages are dropped faster than they are reused — session compaction,
-or deleting sessions — which is exactly how the file that prompted this tool
-reached 10 GB of free pages.
-
 The bar is a composition, not a fill gauge: four things live in that file, and
-only one of them is reclaimable. It is why a file can look nearly full and still
-be mostly waste — the frozen block is real rows no vacuum can touch. The line
-under it answers the question the bar raises: the file is **3.2× the size of the
-data actually in use**.
+only one of them is reclaimable. That is why a database can look nearly full and
+still be mostly waste — the frozen block is real rows no vacuum can touch. The
+line underneath answers the question the bar raises: the file is **3.2× the size
+of the data actually in use**.
+
+A reclaimable figure near zero is the *good* state, not a bug. SQLite reuses
+freed pages before it grows the file, so a database in normal use has nothing
+sitting in the freelist. Pages only pile up when they are dropped faster than
+they are reused — session compaction, or deleting sessions — which is exactly
+how the file that prompted this tool reached 10 GB of them.
 
 ## Install
 
