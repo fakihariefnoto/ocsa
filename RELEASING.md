@@ -37,11 +37,24 @@ one of the first two steps.
 
 ### Locally
 
+The version comes from the highest `v*` tag, not from a file, so the tag is the
+single source of truth and cannot drift from what was published.
+
 ```sh
-make release V=0.1.0 --dry-run       # print the plan and stop
-make release V=0.1.0                 # tag, push, build, publish, update the tap
-./scripts/release.sh --store-token   # only if you need to save a token by hand
+make release --dry-run               # next patch, print the plan and stop
+make release                         # next patch: 0.1.0 -> 0.1.1
+make release V=minor                 # 0.2.0
+make release V=major                 # 1.0.0
+make release V=0.2.3                 # exactly that
 ```
+
+With no tags at all the first release is `0.1.0`, not `0.1.1`: a tool that has
+never been published should not look like it had a patch. A version that is not
+newer than the last tag is refused, and so is one whose tag already exists, so a
+version can never go backwards or collide.
+
+The tag is read from the remote as well as the local repository, because a
+release can be published from another machine.
 
 The script refuses to run when it would produce a half-finished release:
 

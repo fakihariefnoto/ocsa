@@ -253,8 +253,12 @@ whole procedure, including the tap token and how to verify a release without
 publishing one, is in [RELEASING.md](RELEASING.md).
 
 ```sh
-make release V=0.1.0     # uses the git credential you already have
+make release             # next patch version, derived from the last tag
+make release V=minor     # or V=major, or V=1.2.3
 ```
+
+The version comes from the highest `v*` tag, so it cannot drift from what was
+published.
 
 No personal access token is needed if `git push` works from this machine; the
 script falls back to the credential git stores for github.com.
