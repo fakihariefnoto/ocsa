@@ -654,3 +654,94 @@ func TestCompositionLegendSharesSumTo100(t *testing.T) {
 		t.Errorf("the four shares sum to %.1f%%, which is not a whole file", sum)
 	}
 }
+
+// TestScanRecordsWhenItWasTaken is the fix for a dashboard that quietly showed
+// four-day-old numbers: every scan stamps its time, and the header says so.
+func TestScanRecordsWhenItWasTaken(t *testing.T) {
+	s := fixtureScan(t)
+	m := newModel(s)
+	if !m.scannedAt.IsZero() {
+		t.Error("a fresh model claims to have scanned already")
+	}
+
+	out, _ := m.Update(scanMsg{scan: s})
+	m = out.(Model)
+	if m.scannedAt.IsZero() {
+		t.Fatal("scanMsg did not record a scan time")
+	}
+	if m.refreshing {
+		t.Error("still marked as refreshing after the scan arrived")
+	}
+
+	view := m.viewDash()
+	if !strings.Contains(view, "scanned ") {
+		t.Errorf("the header does not say when it scanned:\n%s", view)
+	}
+}
+
+// TestRefreshDoesNotStackOrInterruptAnAction: two scans at once would fight over
+// the file, and scanning during a rewrite reports a half-finished state.
+func TestRefreshDoesNotStackOrInterruptAnAction(t *testing.T) {
+	m := newModel(fixtureScan(t))
+
+	// Already refreshing: a tick must not start another scan.
+	m.refreshing = true
+	out, _ := m.Update(refreshMsg{})
+	if got := out.(Model); got.refreshing != true {
+		t.Error("state lost while refreshing")
+	}
+
+	// Running an action: a tick must not start a scan.
+	m = newModel(fixtureScan(t))
+	m.screen = scrRunning
+	out, _ = m.Update(refreshMsg{})
+	if got := out.(Model); got.refreshing {
+		t.Error("a scan started while an action was running")
+	}
+
+	// Idle and not refreshing: a tick does start one.
+	m = newModel(fixtureScan(t))
+	out, _ = m.Update(refreshMsg{})
+	if got := out.(Model); !got.refreshing {
+		t.Error("no scan started on an idle dashboard")
+	}
+}
+
+// TestManualRefresh: R forces a re-read.
+func TestManualRefresh(t *testing.T) {
+	m := newModel(fixtureScan(t))
+	m = press(t, m, "R")
+	if !m.refreshing {
+		t.Error("R did not start a refresh")
+	}
+	// And the manual refresh must not stack on top of itself.
+	m2 := press(t, m, "R")
+	if !m2.refreshing {
+		t.Error("a second R cleared the refresh state")
+	}
+}
+
+// TestReclaimableSaysWhatItSpans: the total covers the database and the files
+// beside it, which is why it does not match the size of opencode.db.
+func TestReclaimableSaysWhatItSpans(t *testing.T) {
+	s := fixtureScanWithSnapshots(t)
+	out := Preview(s, PreviewOptions{Screen: "dash", Width: 120, Height: 40})
+	line := ""
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "RECLAIMABLE") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no RECLAIMABLE line:\n%s", out)
+	}
+	if !strings.Contains(line, "inside the database") || !strings.Contains(line, "beside it") {
+		t.Errorf("the reclaimable total does not say what it spans: %q", line)
+	}
+	// The database share must be the freelist, not the whole total.
+	if !strings.Contains(line, paths.ByteSize(s.Reclaim.DBFree)) {
+		t.Errorf("the database share is not the freelist (%s): %q",
+			paths.ByteSize(s.Reclaim.DBFree), line)
+	}
+}

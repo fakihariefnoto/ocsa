@@ -64,8 +64,12 @@ func (c Composition) DiskShare() float64 {
 
 // Composition derives the composition from a finished scan.
 func (s *Scan) Composition() Composition {
+	total := s.DBFileBytes
+	if total == 0 {
+		total = s.Stats.FileBytes()
+	}
 	c := Composition{
-		Total:     s.Stats.FileBytes(),
+		Total:     total,
 		Free:      s.Stats.FreeBytes(),
 		DiskFree:  s.DiskFree,
 		DiskTotal: s.DiskTotal,
@@ -77,6 +81,8 @@ func (s *Scan) Composition() Composition {
 			c.Live += g.Bytes
 		}
 	}
+	// Whatever the named parts do not account for is "other", so the segments
+	// always describe the file the user can see with ls.
 	c.Other = c.Total - c.Live - c.Frozen - c.Free
 	if c.Other < 0 {
 		c.Other = 0

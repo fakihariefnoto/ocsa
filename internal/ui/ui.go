@@ -70,6 +70,12 @@ type Model struct {
 	// browsing state
 	filterProject string
 	grouped       bool
+
+	// freshness: the scan is a snapshot, so say when it was taken and keep
+	// taking new ones. A dashboard that silently shows last week's numbers is
+	// worse than one that admits it is old.
+	scannedAt  time.Time
+	refreshing bool
 }
 
 type scanMsg struct {
@@ -84,6 +90,17 @@ type actionMsg struct {
 }
 
 type tickMsg time.Time
+
+// refreshMsg asks for a new scan. refreshEvery is deliberately short: the file
+// changes every time OpenCode writes, so anything slower than a few seconds
+// looks frozen.
+type refreshMsg struct{}
+
+const refreshEvery = 5 * time.Second
+
+func refreshTick() tea.Cmd {
+	return tea.Tick(refreshEvery, func(time.Time) tea.Msg { return refreshMsg{} })
+}
 
 // New builds the initial model and kicks off a scan.
 func New(p paths.Paths) Model {
@@ -187,7 +204,7 @@ func tick() tea.Cmd {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(scanCmd(m.p), m.spinner.Tick)
+	return tea.Batch(scanCmd(m.p), m.spinner.Tick, refreshTick())
 }
 
 // Update implements tea.Model.
@@ -199,7 +216,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanMsg:
 		m.scan, m.err = msg.scan, msg.err
-		return m, nil
+		m.refreshing = false
+		if msg.err == nil {
+			m.scannedAt = time.Now()
+		}
+		return m, refreshTick()
+
+	case refreshMsg:
+		// Never stack scans, and leave the database alone while an action runs.
+		if m.refreshing || m.screen == scrRunning {
+			return m, refreshTick()
+		}
+		m.refreshing = true
+		return m, scanCmd(m.p)
 
 	case actionMsg:
 		m.result, m.runErr = msg.res, msg.err
@@ -297,6 +326,12 @@ func (m Model) dashKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G":
 		m.cursor = len(items) - 1
 		return m, nil
+	case "R":
+		if m.refreshing {
+			return m, nil
+		}
+		m.refreshing = true
+		return m, scanCmd(m.p)
 	case "enter", " ":
 		return m.activate(items[max(0, min(m.cursor, len(items)-1))].id)
 	}

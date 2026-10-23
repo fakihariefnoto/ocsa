@@ -46,6 +46,12 @@ func (m Model) frame(body string) string {
 		width = 40
 	}
 	head := stTitle.Render("OCSA") + stSub.Render("  "+m.p.Data)
+	if !m.scannedAt.IsZero() {
+		head += "   " + stSub.Render("scanned "+m.scannedAt.Format("15:04:05"))
+	}
+	if m.refreshing {
+		head += "  " + stSub.Render("refreshing…")
+	}
 	if m.status != "" {
 		head += "   " + stOK.Render(m.status)
 	}
@@ -176,7 +182,9 @@ func (m Model) viewDash() string {
 	// they can be compared without reading the labels.
 	r := s.Reclaim
 	b.WriteString("\n" + stLabel.Render("RECLAIMABLE") + "  " +
-		stGoodBar.Render(paths.ByteSize(r.Total)) + "\n")
+		stGoodBar.Render(paths.ByteSize(r.Total)) +
+		stSub.Render(fmt.Sprintf("   %s inside the database, %s beside it",
+			paths.ByteSize(r.DBFree), paths.ByteSize(r.Total-r.DBFree))) + "\n")
 	const amountW = 10
 	labelW := cw - amountW - 4
 	if labelW < 18 {

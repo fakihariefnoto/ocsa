@@ -98,6 +98,7 @@ type Scan struct {
 	Generations []Generation
 	Warnings    []string
 	DirTotal    int64
+	DBFileBytes int64 // the file as the filesystem reports it
 	WALBytes    int64
 	SHMBytes    int64
 	DiskFree    int64
@@ -179,6 +180,14 @@ func (s *Scan) warn() {
 		s.Warnings = append(s.Warnings,
 			"database holds "+paths.ByteSize(s.Stats.FreeBytes())+
 				" in free pages - run a vacuum to return it")
+	}
+	if s.DBFileBytes > 0 {
+		if diff := s.DBFileBytes - s.Stats.FileBytes(); diff > s.Stats.PageSize ||
+			diff < -s.Stats.PageSize {
+			s.Warnings = append(s.Warnings, "the file is "+
+				paths.ByteSize(s.DBFileBytes)+" on disk but page accounting says "+
+				paths.ByteSize(s.Stats.FileBytes())+"; pages are in the write-ahead log")
+		}
 	}
 	if s.Stats.AutoVacuum == 0 {
 		s.Warnings = append(s.Warnings,
@@ -269,6 +278,7 @@ func countFiles(p string) int {
 
 func scanArtifacts(s *Scan) {
 	p := s.Paths
+	s.DBFileBytes = statSize(p.DB)
 	s.WALBytes = statSize(p.DB + "-wal")
 	s.SHMBytes = statSize(p.DB + "-shm")
 

@@ -21,6 +21,13 @@ still be mostly waste — the frozen block is real rows no vacuum can touch. The
 line underneath answers the question the bar raises: the file is **3.2× the size
 of the data actually in use**.
 
+The dashboard rescans every five seconds and stamps the header with the time it
+last did, so the numbers are a live view rather than a snapshot of whenever you
+opened it. `R` forces a refresh. The RECLAIMABLE total spans more than the
+database — it counts free pages inside the file, plus the snapshots and log
+beside it — and the line says which is which, because otherwise it looks like it
+disagrees with `ls`.
+
 A reclaimable figure near zero is the *good* state, not a bug. SQLite reuses
 freed pages before it grows the file, so a database in normal use has nothing
 sitting in the freelist. Pages only pile up when they are dropped faster than

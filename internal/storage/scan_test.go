@@ -274,3 +274,34 @@ func TestCompositionSegmentsSumToTheFile(t *testing.T) {
 		}
 	}
 }
+
+// TestCompositionUsesTheFileSize: "on disk" has to mean the file the user can
+// see with ls, not the page arithmetic, which can differ while pages sit in the
+// write-ahead log.
+func TestCompositionUsesTheFileSize(t *testing.T) {
+	p := paths.Paths{}.WithDataDir(t.TempDir())
+	conn, err := db.Create(p.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.SQL.Exec("CREATE TABLE t(x); INSERT INTO t VALUES ('a')"); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	s, err := Run(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.DBFileBytes != fi.Size() {
+		t.Errorf("scan reports the file as %d bytes, filesystem says %d",
+			s.DBFileBytes, fi.Size())
+	}
+	if c := s.Composition(); c.Total != fi.Size() {
+		t.Errorf("composition total %d, file is %d", c.Total, fi.Size())
+	}
+}
